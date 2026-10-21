@@ -1,4 +1,6 @@
-use anyhow::Result;
+use std::{fs, os::unix::fs::PermissionsExt, path::Path};
+
+use anyhow::{bail, Context, Result};
 
 use crate::{adapter::Adapter, config::Config, session};
 
@@ -11,12 +13,23 @@ pub struct Report {
 pub fn inspect(config: &Config) -> Result<Report> {
     let compositor = Adapter::load(&config.compositor)?;
     let greeter = Adapter::load(&config.greeter)?;
+    executable(&compositor.executable)?;
+    executable(&greeter.executable)?;
     let sessions = session::discover(&config.sessions)?;
     Ok(Report {
         compositor: compositor.id,
         greeter: greeter.id,
         session_count: sessions.len(),
     })
+}
+
+fn executable(path: &Path) -> Result<()> {
+    let metadata =
+        fs::metadata(path).with_context(|| format!("inspect executable {}", path.display()))?;
+    if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
+        bail!("adapter executable is not executable: {}", path.display());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -58,5 +71,14 @@ mod tests {
         .unwrap();
         fs::remove_dir_all(root).unwrap();
         assert_eq!(report.session_count, 1);
+    }
+
+    #[test]
+    fn rejects_non_executable_adapter_programs() {
+        let path =
+            std::env::temp_dir().join(format!("alphin-doctor-program-{}", std::process::id()));
+        fs::write(&path, "program").unwrap();
+        assert!(executable(&path).is_err());
+        fs::remove_file(path).unwrap();
     }
 }
