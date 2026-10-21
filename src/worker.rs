@@ -70,6 +70,12 @@ fn supervise(
 }
 
 fn spawn(adapter: &Adapter, runtime_dir: &Path, display: Option<&str>) -> Result<Child> {
+    command_for(adapter, runtime_dir, display)
+        .spawn()
+        .with_context(|| format!("start {} adapter", adapter.id))
+}
+
+fn command_for(adapter: &Adapter, runtime_dir: &Path, display: Option<&str>) -> Command {
     let mut command = Command::new(&adapter.executable);
     command
         .args(&adapter.arguments)
@@ -88,8 +94,6 @@ fn spawn(adapter: &Adapter, runtime_dir: &Path, display: Option<&str>) -> Result
         });
     }
     command
-        .spawn()
-        .with_context(|| format!("start {} adapter", adapter.id))
 }
 
 fn wait_for_wayland_socket(runtime_dir: &Path, timeout: Duration) -> Result<String> {
@@ -212,5 +216,29 @@ mod tests {
             libc::close(descriptors[1]);
         }
         assert_eq!(signal, [1]);
+    }
+
+    #[test]
+    fn greeter_environment_excludes_user_home_configuration() {
+        let adapter = Adapter {
+            id: "test-greeter".into(),
+            executable: PathBuf::from("/usr/bin/true"),
+            arguments: Vec::new(),
+            environment: Default::default(),
+            ipc_version: Some(1),
+            capabilities: Vec::new(),
+            readiness: crate::adapter::Readiness::WaylandSocket { timeout_seconds: 1 },
+            shutdown_timeout_seconds: 1,
+        };
+        let command = command_for(&adapter, Path::new("/run/alphin"), Some("wayland-0"));
+        let environment = command
+            .get_envs()
+            .map(|(name, value)| (name.to_owned(), value.map(|value| value.to_owned())))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert!(!environment.contains_key(std::ffi::OsStr::new("HOME")));
+        assert_eq!(
+            environment.get(std::ffi::OsStr::new("XDG_RUNTIME_DIR")),
+            Some(&Some("/run/alphin".into()))
+        );
     }
 }
