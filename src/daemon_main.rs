@@ -8,7 +8,7 @@ fn main() -> Result<()> {
     if arguments.next().is_some() {
         bail!("unexpected extra argument");
     }
-    let config = alphin::config::Config::load(&config)?;
+    let config = alphin::config::Config::load_system(&config)?;
     let account = alphin::identity::lookup("alphin")?;
     let worker = alphin::daemon::WorkerMonitor::spawn(
         &config.worker,

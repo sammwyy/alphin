@@ -1,5 +1,6 @@
 use std::{
     fs,
+    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
 };
 
@@ -25,6 +26,16 @@ impl Config {
             .with_context(|| format!("parse configuration {}", path.display()))?;
         config.validate()?;
         Ok(config)
+    }
+
+    pub fn load_system(path: &Path) -> Result<Self> {
+        let metadata = fs::symlink_metadata(path)
+            .with_context(|| format!("inspect configuration {}", path.display()))?;
+        if metadata.file_type().is_symlink() || metadata.uid() != 0 || metadata.mode() & 0o022 != 0
+        {
+            bail!("system configuration must be root-owned and not group or world writable");
+        }
+        Self::load(path)
     }
 
     fn validate(&self) -> Result<()> {
@@ -58,5 +69,17 @@ mod tests {
     fn packaged_configuration_validates() {
         Config::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("packaging/config/config.toml"))
             .unwrap();
+    }
+
+    #[test]
+    fn system_configuration_rejects_symlinks() {
+        let root = std::env::temp_dir().join(format!("alphin-config-{}", std::process::id()));
+        std::os::unix::fs::symlink(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("packaging/config/config.toml"),
+            &root,
+        )
+        .unwrap();
+        assert!(Config::load_system(&root).is_err());
+        fs::remove_file(root).unwrap();
     }
 }
