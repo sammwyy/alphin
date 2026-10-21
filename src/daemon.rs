@@ -224,6 +224,9 @@ fn serve_listener(
             }
         }
         state.launch_pending()?;
+        if state.restart_required {
+            bail!("desktop session exited; restarting greeter");
+        }
         match listener.accept() {
             Ok((stream, _)) => {
                 let peer = peer_credentials(&stream)?;
@@ -342,6 +345,7 @@ struct DaemonState {
     pending_session: Option<Vec<String>>,
     session_starting: bool,
     session_started: bool,
+    restart_required: bool,
 }
 
 struct Authentication {
@@ -520,6 +524,7 @@ impl DaemonState {
                     self.authenticated = false;
                     self.session_started = false;
                     self.session_starting = false;
+                    self.restart_required = true;
                     break;
                 }
                 Ok(AuthenticationEvent::SessionFailed) => {
@@ -691,6 +696,7 @@ mod tests {
             pending_session: None,
             session_starting: false,
             session_started: false,
+            restart_required: false,
         };
         assert_eq!(
             handle(
@@ -766,6 +772,7 @@ mod tests {
             pending_session: None,
             session_starting: false,
             session_started: false,
+            restart_required: false,
         };
         assert_eq!(
             state.select_session("blair".into(), &directory).unwrap(),
@@ -800,5 +807,31 @@ mod tests {
             response,
             "{\"kind\":\"status\",\"version\":1,\"status\":\"ready\"}\n"
         );
+    }
+
+    #[test]
+    fn requests_greeter_restart_after_session_exit() {
+        let (responses, _) = mpsc::channel();
+        let (commands, _) = mpsc::channel();
+        let (events, receiver) = mpsc::channel();
+        events.send(AuthenticationEvent::SessionExited).unwrap();
+        let mut state = DaemonState {
+            authentication: Some(Authentication {
+                username: "user".into(),
+                responses,
+                commands,
+                events: receiver,
+            }),
+            prompt: None,
+            authenticated: true,
+            greeter_stopped: true,
+            pending_session: None,
+            session_starting: false,
+            session_started: true,
+            restart_required: false,
+        };
+        state.pump();
+        assert!(state.restart_required);
+        assert!(state.authentication.is_none());
     }
 }
