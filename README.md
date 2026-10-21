@@ -66,6 +66,24 @@ system authentication stack. The bundled Fedora/authselect profile delegates to
 `system-auth` and invokes `pam_systemd`. Authentication succeeds only after PAM
 authentication and account management both succeed.
 
+## Packaging layout
+
+Install the bundled artifacts at these paths:
+
+```text
+/usr/lib/alphin/alphind
+/usr/lib/alphin/alphin-worker
+/usr/lib/alphin/alphin-doctor
+/usr/lib/alphin/compositors/blair.toml
+/usr/lib/alphin/greeters/coconut.toml
+/etc/alphin/config.toml
+/etc/blair/greeter.toml
+/etc/pam.d/alphin
+/usr/lib/systemd/system/alphind.service
+/usr/lib/sysusers.d/alphin.conf
+/usr/lib/tmpfiles.d/alphin.conf
+```
+
 ## Development
 
 Validate an installed configuration without starting a greeter:
