@@ -1,6 +1,6 @@
 use std::{
     fs,
-    os::unix::{fs::FileTypeExt, process::CommandExt},
+    os::unix::{fs::FileTypeExt, io::RawFd, process::CommandExt},
     path::{Path, PathBuf},
     process::{Child, Command},
     thread,
@@ -27,6 +27,24 @@ pub fn run(compositor: &Adapter, greeter: &Adapter, runtime_dir: &Path) -> Resul
         compositor.shutdown_timeout(),
         greeter.shutdown_timeout(),
     )
+}
+
+pub fn protect_control_fd(control_fd: RawFd) -> Result<()> {
+    let flags = unsafe { libc::fcntl(control_fd, libc::F_GETFD) };
+    if flags < 0 || unsafe { libc::fcntl(control_fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0
+    {
+        return Err(std::io::Error::last_os_error())
+            .context("protect worker control file descriptor");
+    }
+    Ok(())
+}
+
+pub fn notify_control(control_fd: RawFd) -> Result<()> {
+    let signal = [1_u8];
+    if unsafe { libc::write(control_fd, signal.as_ptr().cast(), signal.len()) } != 1 {
+        return Err(std::io::Error::last_os_error()).context("notify daemon that greeter stopped");
+    }
+    Ok(())
 }
 
 fn supervise(
@@ -172,5 +190,27 @@ mod tests {
         )
         .unwrap();
         assert!(compositor.try_wait().unwrap().is_some());
+    }
+
+    #[test]
+    fn signals_worker_completion_over_private_fd() {
+        let mut descriptors = [0; 2];
+        assert_eq!(unsafe { libc::pipe(descriptors.as_mut_ptr()) }, 0);
+        protect_control_fd(descriptors[1]).unwrap();
+        assert_ne!(
+            unsafe { libc::fcntl(descriptors[1], libc::F_GETFD) } & libc::FD_CLOEXEC,
+            0
+        );
+        notify_control(descriptors[1]).unwrap();
+        let mut signal = [0_u8];
+        assert_eq!(
+            unsafe { libc::read(descriptors[0], signal.as_mut_ptr().cast(), signal.len()) },
+            1
+        );
+        unsafe {
+            libc::close(descriptors[0]);
+            libc::close(descriptors[1]);
+        }
+        assert_eq!(signal, [1]);
     }
 }
