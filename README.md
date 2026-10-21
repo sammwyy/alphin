@@ -37,10 +37,11 @@ runtime directory is `/run/alphin` with mode `0700`; adapter files and
 The worker clears inherited environment variables and supplies only its runtime
 directory, a fixed PATH, and adapter-declared variables.
 
-The future daemon socket is private to the `alphin` account and will authenticate
-the peer with Unix credentials before accepting protocol messages. Authentication
-secrets remain in PAM conversation buffers and must never be copied to logs,
-arguments, or persistent state.
+The daemon socket is private to the `alphin` account and authenticates the peer
+with Unix credentials before accepting protocol messages. Its versioned JSON
+protocol currently exposes state, status, and session listing; unavailable
+authentication and power operations are rejected explicitly. Authentication
+secrets must never be copied to logs, arguments, or persistent state.
 
 ## Development
 

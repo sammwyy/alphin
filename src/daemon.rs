@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Write},
     os::unix::{
         fs::{FileTypeExt, MetadataExt, PermissionsExt},
         io::AsRawFd,
@@ -47,7 +47,10 @@ pub fn serve(socket_path: &Path, sessions_path: &Path) -> Result<()> {
 
 fn serve_connection(mut stream: UnixStream, sessions_path: &Path) -> Result<()> {
     let mut line = String::new();
-    BufReader::new(stream.try_clone()?).read_line(&mut line)?;
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(2)))?;
+    BufReader::new(stream.try_clone()?)
+        .take(16 * 1024 + 1)
+        .read_line(&mut line)?;
     if line.len() > 16 * 1024 {
         bail!("IPC message exceeds 16 KiB");
     }
@@ -122,6 +125,7 @@ fn peer_uid(stream: &UnixStream) -> Result<u32> {
 mod tests {
     use super::*;
     use crate::ipc::Request;
+    use std::{io::Read, os::unix::net::UnixListener, thread};
 
     #[test]
     fn exposes_ready_greeter_state() {
@@ -155,6 +159,29 @@ mod tests {
                 version: PROTOCOL_VERSION,
                 code: "authentication_unavailable"
             }
+        );
+    }
+
+    #[test]
+    fn returns_a_versioned_json_response() {
+        let path = std::env::temp_dir().join(format!("alphin-ipc-test-{}", std::process::id()));
+        let listener = UnixListener::bind(&path).unwrap();
+        let sessions_path = path.parent().unwrap().to_owned();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            serve_connection(stream, &sessions_path).unwrap();
+        });
+        let mut client = UnixStream::connect(&path).unwrap();
+        client
+            .write_all(b"{\"method\":\"status\",\"version\":1}\n")
+            .unwrap();
+        let mut response = String::new();
+        client.read_to_string(&mut response).unwrap();
+        server.join().unwrap();
+        fs::remove_file(path).unwrap();
+        assert_eq!(
+            response,
+            "{\"kind\":\"status\",\"version\":1,\"status\":\"ready\"}\n"
         );
     }
 }
