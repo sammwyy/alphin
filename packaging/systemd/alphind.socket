@@ -1,0 +1,14 @@
+[Unit]
+Description=Alphin greeter IPC socket
+Before=alphind.service
+
+[Socket]
+ListenStream=/run/alphin/alphind.sock
+SocketUser=root
+SocketGroup=alphin
+SocketMode=0660
+Service=alphind.service
+RemoveOnStop=true
+
+[Install]
+WantedBy=sockets.target

@@ -80,6 +80,7 @@ Install the bundled artifacts at these paths:
 /etc/blair/greeter.toml
 /etc/pam.d/alphin
 /usr/lib/systemd/system/alphind.service
+/usr/lib/systemd/system/alphind.socket
 /usr/lib/sysusers.d/alphin.conf
 /usr/lib/tmpfiles.d/alphin.conf
 ```

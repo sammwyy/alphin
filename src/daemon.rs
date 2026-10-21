@@ -4,7 +4,7 @@ use std::{
     os::unix::{
         ffi::OsStrExt,
         fs::{FileTypeExt, MetadataExt, PermissionsExt},
-        io::{AsRawFd, RawFd},
+        io::{AsRawFd, FromRawFd, RawFd},
         net::{UnixListener, UnixStream},
         process::CommandExt,
     },
@@ -167,6 +167,45 @@ pub fn serve(
     }
     fs::set_permissions(socket_path, fs::Permissions::from_mode(0o660))?;
     let expected_uid = fs::metadata(socket_path)?.uid();
+    serve_listener(listener, sessions_path, worker, expected_uid, expected_gid)
+}
+
+pub fn serve_activated(
+    socket_fd: RawFd,
+    socket_path: &Path,
+    sessions_path: &Path,
+    worker: Option<WorkerMonitor>,
+) -> Result<()> {
+    let expected_gid = socket_directory_gid(socket_path)?;
+    let listener = unsafe { UnixListener::from_raw_fd(socket_fd) };
+    listener.set_nonblocking(true)?;
+    let address = listener.local_addr().context("inspect activated socket")?;
+    if address.as_pathname() != Some(socket_path) {
+        bail!("activated socket does not match {}", socket_path.display());
+    }
+    let socket_metadata = fs::metadata(socket_path)?;
+    if socket_metadata.uid() != 0
+        || socket_metadata.gid() != expected_gid
+        || socket_metadata.mode() & 0o777 != 0o660
+    {
+        bail!("activated socket has unexpected ownership or permissions");
+    }
+    serve_listener(
+        listener,
+        sessions_path,
+        worker,
+        socket_metadata.uid(),
+        expected_gid,
+    )
+}
+
+fn serve_listener(
+    listener: UnixListener,
+    sessions_path: &Path,
+    worker: Option<WorkerMonitor>,
+    expected_uid: u32,
+    expected_gid: u32,
+) -> Result<()> {
     let mut state = DaemonState::default();
     let mut worker = worker;
     loop {

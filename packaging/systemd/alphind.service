@@ -1,5 +1,7 @@
 [Unit]
 Description=Alphin display manager daemon
+Requires=alphind.socket
+After=alphind.socket
 After=systemd-logind.service systemd-tmpfiles-setup.service
 StartLimitIntervalSec=60
 StartLimitBurst=5
@@ -9,3 +11,6 @@ Type=simple
 ExecStart=/usr/lib/alphin/alphind --config /etc/alphin/config.toml
 Restart=on-failure
 RestartSec=2
+
+[Install]
+WantedBy=graphical.target
