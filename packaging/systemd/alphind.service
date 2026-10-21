@@ -1,6 +1,6 @@
 [Unit]
 Description=Alphin display manager daemon
-After=systemd-logind.service
+After=systemd-logind.service systemd-tmpfiles-setup.service
 
 [Service]
 Type=simple

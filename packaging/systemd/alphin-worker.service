@@ -1,6 +1,7 @@
 [Unit]
 Description=Alphin greeter worker
-After=systemd-logind.service
+Requires=alphind.service
+After=alphind.service systemd-logind.service systemd-tmpfiles-setup.service
 
 [Service]
 Type=simple
