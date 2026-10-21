@@ -1,0 +1,12 @@
+[Unit]
+Description=Alphin greeter worker
+After=systemd-logind.service
+
+[Service]
+Type=simple
+User=alphin
+RuntimeDirectory=alphin
+RuntimeDirectoryMode=0700
+ExecStart=/usr/lib/alphin/alphin-worker --compositor /usr/lib/alphin/compositors/blair.toml --greeter /usr/lib/alphin/greeters/coconut.toml --runtime-dir /run/alphin
+Restart=on-failure
+RestartSec=2

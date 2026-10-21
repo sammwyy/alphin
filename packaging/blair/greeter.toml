@@ -1,0 +1,10 @@
+[general]
+hot_reload = false
+
+[integrations]
+dbus = false
+
+[workspaces]
+count = 1
+dynamic = false
+

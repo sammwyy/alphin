@@ -1,0 +1,8 @@
+id = "blair"
+executable = "/usr/bin/blair"
+arguments = ["--profile", "greeter"]
+shutdown_timeout_seconds = 10
+
+[readiness]
+kind = "wayland_socket"
+timeout_seconds = 20

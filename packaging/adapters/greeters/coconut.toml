@@ -1,0 +1,7 @@
+id = "coconut-greeter"
+executable = "/usr/bin/coconut-greeter"
+shutdown_timeout_seconds = 10
+
+[readiness]
+kind = "wayland_socket"
+timeout_seconds = 1
