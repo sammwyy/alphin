@@ -21,14 +21,7 @@ use crate::{
 };
 
 pub fn serve(socket_path: &Path, sessions_path: &Path) -> Result<()> {
-    let parent = socket_path
-        .parent()
-        .context("private socket has no parent directory")?;
-    let parent_metadata = fs::metadata(parent)
-        .with_context(|| format!("inspect private socket directory {}", parent.display()))?;
-    if !parent_metadata.is_dir() || parent_metadata.mode() & 0o077 != 0 {
-        bail!("private socket directory must not be accessible to other users");
-    }
+    let expected_gid = socket_directory_gid(socket_path)?;
     if socket_path.exists() {
         let metadata = fs::symlink_metadata(socket_path)?;
         if !metadata.file_type().is_socket() {
@@ -36,7 +29,6 @@ pub fn serve(socket_path: &Path, sessions_path: &Path) -> Result<()> {
         }
         fs::remove_file(socket_path)?;
     }
-    let expected_gid = parent_metadata.gid();
     let listener = UnixListener::bind(socket_path)
         .with_context(|| format!("bind private socket {}", socket_path.display()))?;
     let path = std::ffi::CString::new(socket_path.as_os_str().as_bytes())
@@ -59,6 +51,18 @@ pub fn serve(socket_path: &Path, sessions_path: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn socket_directory_gid(socket_path: &Path) -> Result<u32> {
+    let parent = socket_path
+        .parent()
+        .context("private socket has no parent directory")?;
+    let parent_metadata = fs::metadata(parent)
+        .with_context(|| format!("inspect private socket directory {}", parent.display()))?;
+    if !parent_metadata.is_dir() || parent_metadata.mode() & 0o077 != 0 {
+        bail!("private socket directory must not be accessible to other users");
+    }
+    Ok(parent_metadata.gid())
 }
 
 fn serve_connection(
@@ -368,6 +372,17 @@ mod tests {
                 echo: false,
             }
         );
+    }
+
+    #[test]
+    fn requires_private_socket_directory() {
+        let path = std::env::temp_dir().join(format!("alphin-runtime-test-{}", std::process::id()));
+        fs::create_dir_all(&path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(socket_directory_gid(&path.join("alphind.sock")).is_ok());
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(socket_directory_gid(&path.join("alphind.sock")).is_err());
+        fs::remove_dir(path).unwrap();
     }
 
     #[test]
