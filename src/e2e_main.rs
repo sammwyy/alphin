@@ -21,7 +21,7 @@ fn main() -> Result<()> {
     fs::write("/run/alphin/.alphin-e2e-stop-greeter", [])?;
     wait_for_phase("session_running", Duration::from_secs(30))?;
     fs::remove_file("/run/alphin/.alphin-e2e-stop-greeter")?;
-    kill_process("alphin-e2e-ses")?;
+    kill_process("alphin-e2e-sess")?;
     wait_for_phase("greeter", Duration::from_secs(45))?;
     println!("ALPHIN_E2E_OK boot greeter pam handoff logout recovery");
     Ok(())
