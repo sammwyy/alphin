@@ -247,7 +247,9 @@ fn serve_listener(
             Ok((stream, _)) => {
                 let peer = peer_credentials(&stream)?;
                 if peer.uid == expected_uid || peer.gid == expected_gid {
-                    serve_connection(stream, sessions_path, &mut state)?;
+                    if let Err(error) = serve_connection(stream, sessions_path, &mut state) {
+                        eprintln!("rejecting failed greeter IPC connection: {error:#}");
+                    }
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
