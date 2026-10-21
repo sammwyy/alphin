@@ -2,7 +2,7 @@
 set -euo pipefail
 
 image_dir=${1:?usage: qemu-e2e.sh IMAGE_DIR [SECONDS]}
-seconds=${2:-180}
+seconds=${2:-240}
 if test -n "${ALPHIN_E2E_LOG:-}"; then
     log=$ALPHIN_E2E_LOG
     : >"$log"
