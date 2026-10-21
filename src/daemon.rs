@@ -480,14 +480,16 @@ impl DaemonState {
             };
             let transaction = match transaction.open_session() {
                 Ok(transaction) => transaction,
-                Err(_) => {
+                Err(error) => {
+                    eprintln!("failed to open PAM session for {thread_username}: {error:#}");
                     let _ = events.send(AuthenticationEvent::SessionFailed);
                     return;
                 }
             };
             let mut child = match identity::spawn(&command, &account, &runtime_dir) {
                 Ok(child) => child,
-                Err(_) => {
+                Err(error) => {
+                    eprintln!("failed to launch session for {thread_username}: {error:#}");
                     let _ = events.send(AuthenticationEvent::SessionFailed);
                     return;
                 }
