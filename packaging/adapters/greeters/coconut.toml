@@ -2,6 +2,9 @@ id = "coconut-greeter"
 executable = "/usr/bin/coconut-greeter"
 shutdown_timeout_seconds = 10
 
+[environment]
+ALPHIN_SOCKET = "/run/alphin/alphind.sock"
+
 [readiness]
 kind = "wayland_socket"
 timeout_seconds = 1

@@ -108,4 +108,11 @@ mod tests {
         .unwrap();
         adapter.validate().unwrap();
     }
+
+    #[test]
+    fn packaged_adapters_validate() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("packaging/adapters");
+        Adapter::load(&root.join("compositors/blair.toml")).unwrap();
+        Adapter::load(&root.join("greeters/coconut.toml")).unwrap();
+    }
 }
