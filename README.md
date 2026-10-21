@@ -36,6 +36,7 @@ without a shell, and removes desktop-entry field codes before execution.
 ## Security model
 
 See [the security model](docs/security.md) and [adapter format](docs/adapters.md).
+The greeter IPC contract is in [the protocol reference](docs/protocol.md).
 
 The greeter compositor and UI run under the dedicated `alphin` account. Their
 runtime directory is `/run/alphin` with mode `0700`; adapter files and
