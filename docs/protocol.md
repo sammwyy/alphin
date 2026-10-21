@@ -27,3 +27,6 @@ the selected session without a shell.
 
 `Error.code` is stable machine-readable text. Clients must not display a raw
 PAM or system error as an authentication prompt.
+
+Rust greeters can use `alphin::client::Client` or
+`alphin::client::socket_from_environment()` instead of implementing framing.
