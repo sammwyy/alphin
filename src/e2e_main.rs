@@ -80,6 +80,7 @@ fn require_session(client: &Client, id: &str) -> Result<()> {
 }
 
 fn kill_process(name: &str) -> Result<()> {
+    let mut candidates = Vec::new();
     for entry in fs::read_dir("/proc").context("read process table")? {
         let entry = entry?;
         let Ok(pid) = entry.file_name().to_string_lossy().parse::<i32>() else {
@@ -91,7 +92,11 @@ fn kill_process(name: &str) -> Result<()> {
         let Ok(status) = fs::read_to_string(entry.path().join("status")) else {
             continue;
         };
-        if comm.trim() == name {
+        let comm = comm.trim();
+        if comm.starts_with("alphin-e2e-") {
+            candidates.push(format!("{pid}:{comm}"));
+        }
+        if comm == name {
             if status.lines().any(|line| line == "State:\tZ (zombie)") {
                 continue;
             }
@@ -100,5 +105,8 @@ fn kill_process(name: &str) -> Result<()> {
             }
         }
     }
-    bail!("process {name} is not running")
+    bail!(
+        "process {name} is not running; E2E candidates: {}",
+        candidates.join(", ")
+    )
 }
