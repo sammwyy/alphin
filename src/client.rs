@@ -6,7 +6,9 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
+use serde::Serialize;
 use serde_json::{json, Value};
+use zeroize::Zeroize;
 
 use crate::ipc::PROTOCOL_VERSION;
 
@@ -43,9 +45,14 @@ impl Client {
     }
 
     pub fn respond(&self, response: String) -> Result<Value> {
-        self.request(
-            json!({ "method": "respond", "version": PROTOCOL_VERSION, "response": response }),
-        )
+        let mut response = response;
+        let result = self.request(RespondRequest {
+            method: "respond",
+            version: PROTOCOL_VERSION,
+            response: &response,
+        });
+        response.zeroize();
+        result
     }
 
     pub fn cancel(&self) -> Result<Value> {
@@ -58,7 +65,7 @@ impl Client {
         )
     }
 
-    fn request(&self, request: Value) -> Result<Value> {
+    fn request(&self, request: impl Serialize) -> Result<Value> {
         let mut stream = UnixStream::connect(&self.socket)
             .with_context(|| format!("connect to {}", self.socket.display()))?;
         stream.set_read_timeout(Some(Duration::from_secs(2)))?;
@@ -71,6 +78,13 @@ impl Client {
         }
         serde_json::from_str(&response).context("parse daemon response")
     }
+}
+
+#[derive(Serialize)]
+struct RespondRequest<'a> {
+    method: &'static str,
+    version: u16,
+    response: &'a str,
 }
 
 pub fn socket_from_environment() -> Result<Client> {
