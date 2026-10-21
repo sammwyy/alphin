@@ -22,5 +22,6 @@ The daemon accepts authentication only for eligible local accounts: UID 1000
 through 60000, with a login shell that is not `nologin` or `false`.
 
 The greeter worker must stop its compositor before a desktop session starts.
-Until daemon-owned worker lifecycle and logind scope handoff are active,
-`StartSession` remains unavailable rather than risking concurrent DRM access.
+Alphind owns the worker and accepts its completion only from a private control
+file descriptor that is closed before the UI executes. A selected session is
+held until that signal arrives, then runs under its PAM transaction.

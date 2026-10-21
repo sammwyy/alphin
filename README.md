@@ -49,9 +49,10 @@ private completion signal after the greeter compositor has stopped.
 The daemon socket is private to the `alphin` account and authenticates the peer
 with Unix credentials before accepting protocol messages. Its versioned JSON
 protocol currently exposes state, status, user listing, session listing, and
-PAM authentication. Session start and power operations are rejected until their
-logind lifecycle is available. Authentication secrets must never be copied to
-logs, arguments, or persistent state.
+PAM authentication. Session start is queued until the daemon confirms that the
+worker has stopped the greeter compositor; power operations remain unavailable
+until logind policy is available. Authentication secrets must never be copied
+to logs, arguments, or persistent state.
 
 `BeginAuthentication`, `Respond`, and `Cancel` run a Linux-PAM conversation.
 The distribution package must install `/etc/pam.d/alphin` using its established
