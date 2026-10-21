@@ -24,3 +24,4 @@ if test "$status" -ne 124; then
     exit "$status"
 fi
 grep -q 'Linux version' "$log" || { cat "$log" >&2; exit 1; }
+grep -q 'Run /init as init process' "$log" || { cat "$log" >&2; exit 1; }
