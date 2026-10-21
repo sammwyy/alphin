@@ -2,6 +2,9 @@ use std::{fs, path::Path};
 
 use anyhow::{Context, Result};
 
+pub const MINIMUM_UID: u32 = 1000;
+pub const MAXIMUM_UID: u32 = 60_000;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct User {
     pub username: String,
@@ -21,6 +24,12 @@ pub fn discover(path: &Path, minimum_uid: u32, maximum_uid: u32) -> Result<Vec<U
             .then_with(|| left.username.cmp(&right.username))
     });
     Ok(users)
+}
+
+pub fn is_eligible(path: &Path, username: &str) -> Result<bool> {
+    Ok(discover(path, MINIMUM_UID, MAXIMUM_UID)?
+        .iter()
+        .any(|user| user.username == username))
 }
 
 fn parse(line: &str, minimum_uid: u32, maximum_uid: u32) -> Option<User> {

@@ -114,13 +114,17 @@ fn handle(request: Request, sessions_path: &Path, state: &mut DaemonState) -> Re
         },
         Request::ListUsers { .. } => Ok(Response::Users {
             version: PROTOCOL_VERSION,
-            users: users::discover(Path::new("/etc/passwd"), 1000, 60_000)?
-                .into_iter()
-                .map(|user| UserInfo {
-                    username: user.username,
-                    display_name: user.display_name,
-                })
-                .collect(),
+            users: users::discover(
+                Path::new("/etc/passwd"),
+                users::MINIMUM_UID,
+                users::MAXIMUM_UID,
+            )?
+            .into_iter()
+            .map(|user| UserInfo {
+                username: user.username,
+                display_name: user.display_name,
+            })
+            .collect(),
         }),
         Request::ListSessions { .. } => Ok(Response::Sessions {
             version: PROTOCOL_VERSION,
@@ -185,6 +189,12 @@ impl DaemonState {
             return Ok(Response::Error {
                 version: PROTOCOL_VERSION,
                 code: "invalid_username",
+            });
+        }
+        if !users::is_eligible(Path::new("/etc/passwd"), &username)? {
+            return Ok(Response::Error {
+                version: PROTOCOL_VERSION,
+                code: "ineligible_user",
             });
         }
         let (responses, response_receiver) = mpsc::channel();
@@ -343,6 +353,18 @@ mod tests {
             Response::Error {
                 version: PROTOCOL_VERSION,
                 code: "invalid_username"
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_ineligible_authentication_usernames() {
+        let mut state = DaemonState::default();
+        assert_eq!(
+            state.begin("root".into()).unwrap(),
+            Response::Error {
+                version: PROTOCOL_VERSION,
+                code: "ineligible_user",
             }
         );
     }
