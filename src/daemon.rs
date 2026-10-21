@@ -12,8 +12,8 @@ use std::{
 use anyhow::{bail, Context, Result};
 
 use crate::{
-    ipc::{Request, Response, SessionInfo, PROTOCOL_VERSION},
-    session,
+    ipc::{Request, Response, SessionInfo, UserInfo, PROTOCOL_VERSION},
+    session, users,
 };
 
 pub fn serve(socket_path: &Path, sessions_path: &Path) -> Result<()> {
@@ -79,6 +79,16 @@ fn handle(request: Request, sessions_path: &Path) -> Result<Response> {
         Request::Status { .. } => Ok(Response::Status {
             version: PROTOCOL_VERSION,
             status: "ready",
+        }),
+        Request::ListUsers { .. } => Ok(Response::Users {
+            version: PROTOCOL_VERSION,
+            users: users::discover(Path::new("/etc/passwd"), 1000, 60_000)?
+                .into_iter()
+                .map(|user| UserInfo {
+                    username: user.username,
+                    display_name: user.display_name,
+                })
+                .collect(),
         }),
         Request::ListSessions { .. } => Ok(Response::Sessions {
             version: PROTOCOL_VERSION,

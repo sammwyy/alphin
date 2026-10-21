@@ -39,7 +39,7 @@ directory, a fixed PATH, and adapter-declared variables.
 
 The daemon socket is private to the `alphin` account and authenticates the peer
 with Unix credentials before accepting protocol messages. Its versioned JSON
-protocol currently exposes state, status, and session listing; unavailable
+protocol currently exposes state, status, user listing, and session listing; unavailable
 authentication and power operations are rejected explicitly. Authentication
 secrets must never be copied to logs, arguments, or persistent state.
 

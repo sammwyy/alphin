@@ -6,6 +6,7 @@ pub const PROTOCOL_VERSION: u16 = 1;
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
     GetState { version: u16 },
+    ListUsers { version: u16 },
     ListSessions { version: u16 },
     Status { version: u16 },
     BeginAuthentication { version: u16, username: String },
@@ -19,6 +20,7 @@ impl Request {
     pub fn version(&self) -> u16 {
         match self {
             Self::GetState { version }
+            | Self::ListUsers { version }
             | Self::ListSessions { version }
             | Self::Status { version }
             | Self::BeginAuthentication { version, .. }
@@ -41,6 +43,10 @@ pub enum Response {
         version: u16,
         sessions: Vec<SessionInfo>,
     },
+    Users {
+        version: u16,
+        users: Vec<UserInfo>,
+    },
     Status {
         version: u16,
         status: &'static str,
@@ -55,4 +61,10 @@ pub enum Response {
 pub struct SessionInfo {
     pub id: String,
     pub name: String,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct UserInfo {
+    pub username: String,
+    pub display_name: String,
 }
