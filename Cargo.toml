@@ -21,6 +21,10 @@ path = "src/daemon_main.rs"
 name = "alphin-doctor"
 path = "src/doctor_main.rs"
 
+[[bin]]
+name = "alphin-e2e"
+path = "src/e2e_main.rs"
+
 [dependencies]
 anyhow = "1"
 libc = "0.2"
