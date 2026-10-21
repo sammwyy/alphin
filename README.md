@@ -31,6 +31,8 @@ without a shell, and removes desktop-entry field codes before execution.
 
 ## Security model
 
+See [the security model](docs/security.md) and [adapter format](docs/adapters.md).
+
 The greeter compositor and UI run under the dedicated `alphin` account. Their
 runtime directory is `/run/alphin` with mode `0700`; adapter files and
 `/etc/alphin` are root-owned and not writable by the greeter or desktop users.
