@@ -25,6 +25,18 @@ path = "src/doctor_main.rs"
 name = "alphin-e2e"
 path = "src/e2e_main.rs"
 
+[[bin]]
+name = "alphin-e2e-compositor"
+path = "src/e2e_compositor.rs"
+
+[[bin]]
+name = "alphin-e2e-greeter"
+path = "src/e2e_wait.rs"
+
+[[bin]]
+name = "alphin-e2e-session"
+path = "src/e2e_wait.rs"
+
 [dependencies]
 anyhow = "1"
 libc = "0.2"

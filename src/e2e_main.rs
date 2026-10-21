@@ -12,15 +12,15 @@ fn main() -> Result<()> {
     wait_for_phase("greeter", Duration::from_secs(45))?;
     let client = Client::new(SOCKET);
     require_user(&client, "coconut")?;
-    require_session(&client, "blair")?;
+    require_session(&client, "alphin-e2e")?;
     client.begin_authentication("coconut")?;
     wait_for_prompt(&client, Duration::from_secs(10))?;
     client.respond("coconut".to_owned())?;
     wait_for_phase("authenticated", Duration::from_secs(10))?;
-    client.start_session("blair")?;
+    client.start_session("alphin-e2e")?;
     kill_process("coconut-greeter")?;
     wait_for_phase("session_running", Duration::from_secs(30))?;
-    kill_process("blair")?;
+    kill_process("alphin-e2e-ses")?;
     wait_for_phase("greeter", Duration::from_secs(45))?;
     println!("ALPHIN_E2E_OK boot greeter pam handoff logout recovery");
     Ok(())
