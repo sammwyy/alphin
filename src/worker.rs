@@ -20,14 +20,35 @@ pub fn run(compositor: &Adapter, greeter: &Adapter, runtime_dir: &Path) -> Resul
             return Err(error);
         }
     };
-    let status = spawn(greeter, runtime_dir, Some(&display))?
-        .wait()
-        .context("wait for greeter")?;
-    stop(&mut compositor_process, compositor.shutdown_timeout());
-    if !status.success() {
-        bail!("greeter exited with {status}");
+    let mut greeter_process = spawn(greeter, runtime_dir, Some(&display))?;
+    supervise(
+        &mut compositor_process,
+        &mut greeter_process,
+        compositor.shutdown_timeout(),
+        greeter.shutdown_timeout(),
+    )
+}
+
+fn supervise(
+    compositor: &mut Child,
+    greeter: &mut Child,
+    compositor_shutdown_timeout: Duration,
+    greeter_shutdown_timeout: Duration,
+) -> Result<()> {
+    loop {
+        if let Some(status) = greeter.try_wait().context("check greeter status")? {
+            stop(compositor, compositor_shutdown_timeout);
+            if status.success() {
+                return Ok(());
+            }
+            bail!("greeter exited with {status}");
+        }
+        if let Some(status) = compositor.try_wait().context("check compositor status")? {
+            stop(greeter, greeter_shutdown_timeout);
+            bail!("compositor exited before greeter with {status}");
+        }
+        thread::sleep(Duration::from_millis(25));
     }
-    Ok(())
 }
 
 fn spawn(adapter: &Adapter, runtime_dir: &Path, display: Option<&str>) -> Result<Child> {
@@ -123,5 +144,19 @@ mod tests {
         );
         fs::remove_file(socket).unwrap();
         fs::remove_dir(path).unwrap();
+    }
+
+    #[test]
+    fn terminates_greeter_after_compositor_crash() {
+        let mut compositor = Command::new("/usr/bin/true").spawn().unwrap();
+        let mut greeter = Command::new("/usr/bin/sleep").arg("5").spawn().unwrap();
+        assert!(supervise(
+            &mut compositor,
+            &mut greeter,
+            Duration::ZERO,
+            Duration::ZERO
+        )
+        .is_err());
+        assert!(greeter.try_wait().unwrap().is_some());
     }
 }
