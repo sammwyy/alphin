@@ -43,6 +43,13 @@ pub fn lookup_in(username: &str, passwd_path: &Path, group_path: &Path) -> Resul
 
 pub fn spawn(command: &[String], account: &Account, runtime_dir: &Path) -> Result<Child> {
     let executable = command.first().context("session command is empty")?;
+    command_for(command, account, runtime_dir)?
+        .spawn()
+        .with_context(|| format!("start session executable {executable}"))
+}
+
+fn command_for(command: &[String], account: &Account, runtime_dir: &Path) -> Result<Command> {
+    let executable = command.first().context("session command is empty")?;
     if command.iter().any(|argument| argument.contains('\0')) {
         bail!("session command contains a NUL byte");
     }
@@ -60,6 +67,10 @@ pub fn spawn(command: &[String], account: &Account, runtime_dir: &Path) -> Resul
         .env("USER", &account.username)
         .env("LOGNAME", &account.username)
         .env("SHELL", shell)
+        .env(
+            "PATH",
+            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        )
         .env("XDG_RUNTIME_DIR", runtime_dir)
         .env("XDG_SESSION_TYPE", "wayland")
         .env("XDG_CURRENT_DESKTOP", "Blair");
@@ -82,9 +93,7 @@ pub fn spawn(command: &[String], account: &Account, runtime_dir: &Path) -> Resul
             Ok(())
         });
     }
-    process
-        .spawn()
-        .with_context(|| format!("start session executable {executable}"))
+    Ok(process)
 }
 
 fn parse_passwd(line: &str, expected_username: &str) -> Option<Account> {
@@ -151,5 +160,33 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
         assert_eq!(account.groups, [44, 100]);
         assert_eq!(account.home, Path::new("/home/alex"));
+    }
+
+    #[test]
+    fn session_environment_is_explicit() {
+        let account = Account {
+            username: "alex".into(),
+            uid: unsafe { libc::geteuid() },
+            gid: unsafe { libc::getegid() },
+            home: PathBuf::from("/tmp"),
+            shell: PathBuf::from("/bin/bash"),
+            groups: vec![unsafe { libc::getegid() }],
+        };
+        let process = command_for(
+            &["/usr/bin/env".into()],
+            &account,
+            Path::new("/run/user/1000"),
+        )
+        .unwrap();
+        let environment = process
+            .get_envs()
+            .map(|(name, value)| (name.to_owned(), value.map(|value| value.to_owned())))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(environment.len(), 8);
+        assert_eq!(
+            environment.get(std::ffi::OsStr::new("XDG_SESSION_TYPE")),
+            Some(&Some("wayland".into()))
+        );
+        assert!(!environment.contains_key(std::ffi::OsStr::new("LD_PRELOAD")));
     }
 }
