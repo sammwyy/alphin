@@ -2,9 +2,14 @@
 set -euo pipefail
 
 image_dir=${1:?usage: qemu-e2e.sh IMAGE_DIR [SECONDS]}
-seconds=${2:-120}
-log=$(mktemp)
-trap 'rm -f "$log"' EXIT
+seconds=${2:-180}
+if test -n "${ALPHIN_E2E_LOG:-}"; then
+    log=$ALPHIN_E2E_LOG
+    : >"$log"
+else
+    log=$(mktemp)
+    trap 'rm -f "$log"' EXIT
+fi
 
 for file in vmlinuz initramfs.img rootfs.img; do
     test -r "$image_dir/$file" || { echo "missing $image_dir/$file" >&2; exit 2; }

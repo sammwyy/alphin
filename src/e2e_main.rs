@@ -18,8 +18,9 @@ fn main() -> Result<()> {
     client.respond("coconut".to_owned())?;
     wait_for_phase("authenticated", Duration::from_secs(10))?;
     client.start_session("alphin-e2e")?;
-    kill_process("alphin-e2e-gree")?;
+    fs::write("/run/alphin/.alphin-e2e-stop-greeter", [])?;
     wait_for_phase("session_running", Duration::from_secs(30))?;
+    fs::remove_file("/run/alphin/.alphin-e2e-stop-greeter")?;
     kill_process("alphin-e2e-ses")?;
     wait_for_phase("greeter", Duration::from_secs(45))?;
     println!("ALPHIN_E2E_OK boot greeter pam handoff logout recovery");
