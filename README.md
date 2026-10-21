@@ -42,6 +42,10 @@ verifies Unix peer credentials before processing a request. The worker clears
 inherited environment variables and supplies only its runtime directory, a
 fixed PATH, and adapter-declared variables.
 
+The system package creates the `alphin` account through `sysusers` and starts
+the worker as that account. Alphind owns the worker process and receives its
+private completion signal after the greeter compositor has stopped.
+
 The daemon socket is private to the `alphin` account and authenticates the peer
 with Unix credentials before accepting protocol messages. Its versioned JSON
 protocol currently exposes state, status, user listing, session listing, and
