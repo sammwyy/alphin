@@ -8,7 +8,7 @@ use std::{
         net::{UnixListener, UnixStream},
         process::CommandExt,
     },
-    path::Path,
+    path::{Path, PathBuf},
     process::{Child, Command},
     sync::mpsc::{self, Receiver, Sender, TryRecvError},
     thread,
@@ -17,7 +17,7 @@ use std::{
 use anyhow::{bail, Context, Result};
 
 use crate::{
-    identity::Account,
+    identity::{self, Account},
     ipc::{Request, Response, SessionInfo, UserInfo, PROTOCOL_VERSION},
     pam::{self, Secret},
     session, users,
@@ -184,6 +184,7 @@ pub fn serve(
                 }
             }
         }
+        state.launch_pending()?;
         match listener.accept() {
             Ok((stream, _)) => {
                 let peer = peer_credentials(&stream)?;
@@ -285,7 +286,8 @@ fn handle(request: Request, sessions_path: &Path, state: &mut DaemonState) -> Re
         Request::BeginAuthentication { username, .. } => state.begin(username),
         Request::Respond { response, .. } => state.respond(response),
         Request::Cancel { .. } => Ok(state.cancel()),
-        Request::StartSession { .. } | Request::PowerAction { .. } => Ok(Response::Error {
+        Request::StartSession { session, .. } => state.select_session(session, sessions_path),
+        Request::PowerAction { .. } => Ok(Response::Error {
             version: PROTOCOL_VERSION,
             code: "operation_unavailable",
         }),
@@ -298,22 +300,42 @@ struct DaemonState {
     prompt: Option<pam::Prompt>,
     authenticated: bool,
     greeter_stopped: bool,
+    pending_session: Option<Vec<String>>,
+    session_starting: bool,
+    session_started: bool,
 }
 
 struct Authentication {
+    username: String,
     responses: Sender<Secret>,
+    commands: Sender<AuthenticationCommand>,
     events: Receiver<AuthenticationEvent>,
+}
+
+enum AuthenticationCommand {
+    Launch {
+        command: Vec<String>,
+        account: Account,
+        runtime_dir: PathBuf,
+    },
 }
 
 enum AuthenticationEvent {
     Failed,
     Succeeded,
     Prompt(pam::Prompt),
+    SessionStarted,
+    SessionFailed,
+    SessionExited,
 }
 
 impl DaemonState {
     fn phase(&self) -> &'static str {
-        if self.authenticated {
+        if self.session_started {
+            "session_running"
+        } else if self.session_starting {
+            "session_starting"
+        } else if self.authenticated {
             "authenticated"
         } else if self.greeter_stopped {
             "greeter_stopped"
@@ -347,7 +369,9 @@ impl DaemonState {
             });
         }
         let (responses, response_receiver) = mpsc::channel();
+        let (commands, command_receiver) = mpsc::channel();
         let (events, event_receiver) = mpsc::channel();
+        let thread_username = username.clone();
         thread::spawn(move || {
             let (prompts, prompt_receiver) = mpsc::channel();
             let prompt_events = events.clone();
@@ -363,19 +387,48 @@ impl DaemonState {
             });
             let result = pam::Transaction::authenticate_interactive(
                 "alphin",
-                &username,
+                &thread_username,
                 prompts,
                 response_receiver,
             );
-            let _ = events.send(if result.is_ok() {
-                AuthenticationEvent::Succeeded
-            } else {
-                AuthenticationEvent::Failed
-            });
+            let Ok(transaction) = result else {
+                let _ = events.send(AuthenticationEvent::Failed);
+                let _ = forwarder.join();
+                return;
+            };
+            let _ = events.send(AuthenticationEvent::Succeeded);
             let _ = forwarder.join();
+            let Ok(AuthenticationCommand::Launch {
+                command,
+                account,
+                runtime_dir,
+            }) = command_receiver.recv()
+            else {
+                return;
+            };
+            let transaction = match transaction.open_session() {
+                Ok(transaction) => transaction,
+                Err(_) => {
+                    let _ = events.send(AuthenticationEvent::SessionFailed);
+                    return;
+                }
+            };
+            let mut child = match identity::spawn(&command, &account, &runtime_dir) {
+                Ok(child) => child,
+                Err(_) => {
+                    let _ = events.send(AuthenticationEvent::SessionFailed);
+                    return;
+                }
+            };
+            let _ = events.send(AuthenticationEvent::SessionStarted);
+            let _ = child.wait();
+            drop(transaction);
+            let _ = events.send(AuthenticationEvent::SessionExited);
         });
         self.authentication = Some(Authentication {
+            username,
             responses,
+            commands,
             events: event_receiver,
         });
         Ok(Response::Status {
@@ -405,6 +458,9 @@ impl DaemonState {
         self.authentication = None;
         self.prompt = None;
         self.authenticated = false;
+        self.pending_session = None;
+        self.session_starting = false;
+        self.session_started = false;
         Response::Status {
             version: PROTOCOL_VERSION,
             status: "cancelled",
@@ -418,10 +474,18 @@ impl DaemonState {
         loop {
             match authentication.events.try_recv() {
                 Ok(AuthenticationEvent::Prompt(prompt)) => self.prompt = Some(prompt),
-                Ok(AuthenticationEvent::Succeeded) => {
-                    self.authenticated = true;
+                Ok(AuthenticationEvent::Succeeded) => self.authenticated = true,
+                Ok(AuthenticationEvent::SessionStarted) => self.session_started = true,
+                Ok(AuthenticationEvent::SessionExited) => {
                     self.authentication = None;
+                    self.authenticated = false;
+                    self.session_started = false;
+                    self.session_starting = false;
                     break;
+                }
+                Ok(AuthenticationEvent::SessionFailed) => {
+                    self.session_starting = false;
+                    self.pending_session = None;
                 }
                 Ok(AuthenticationEvent::Failed) | Err(TryRecvError::Disconnected) => {
                     self.authentication = None;
@@ -431,6 +495,63 @@ impl DaemonState {
                 Err(TryRecvError::Empty) => break,
             }
         }
+    }
+
+    fn select_session(&mut self, id: String, sessions_path: &Path) -> Result<Response> {
+        if !self.authenticated {
+            return Ok(Response::Error {
+                version: PROTOCOL_VERSION,
+                code: "authentication_required",
+            });
+        }
+        if self.pending_session.is_some() || self.session_starting || self.session_started {
+            return Ok(Response::Error {
+                version: PROTOCOL_VERSION,
+                code: "session_in_progress",
+            });
+        }
+        let session = session::discover(sessions_path)?
+            .into_iter()
+            .find(|session| session.id == id);
+        let Some(session) = session else {
+            return Ok(Response::Error {
+                version: PROTOCOL_VERSION,
+                code: "unknown_session",
+            });
+        };
+        self.pending_session = Some(session.command);
+        Ok(Response::Status {
+            version: PROTOCOL_VERSION,
+            status: "session_queued",
+        })
+    }
+
+    fn launch_pending(&mut self) -> Result<()> {
+        self.pump();
+        if !self.greeter_stopped
+            || !self.authenticated
+            || self.session_starting
+            || self.pending_session.is_none()
+        {
+            return Ok(());
+        }
+        let command = self.pending_session.take().unwrap();
+        let authentication = self
+            .authentication
+            .as_ref()
+            .context("PAM transaction is unavailable")?;
+        let account = identity::lookup(&authentication.username)?;
+        let runtime_dir = PathBuf::from(format!("/run/user/{}", account.uid));
+        authentication
+            .commands
+            .send(AuthenticationCommand::Launch {
+                command,
+                account,
+                runtime_dir,
+            })
+            .map_err(|_| anyhow::anyhow!("PAM session thread is unavailable"))?;
+        self.session_starting = true;
+        Ok(())
     }
 }
 
@@ -528,6 +649,9 @@ mod tests {
             }),
             authenticated: false,
             greeter_stopped: false,
+            pending_session: None,
+            session_starting: false,
+            session_started: false,
         };
         assert_eq!(
             handle(
@@ -575,6 +699,44 @@ mod tests {
         };
         assert!(matches!(worker.poll().unwrap(), WorkerState::Stopped));
         assert!(matches!(worker.poll().unwrap(), WorkerState::Stopped));
+    }
+
+    #[test]
+    fn queues_selected_session_until_greeter_stops() {
+        let directory =
+            std::env::temp_dir().join(format!("alphin-session-test-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            directory.join("blair.desktop"),
+            "[Desktop Entry]\nType=Application\nName=Blair\nExec=/usr/bin/blair\n",
+        )
+        .unwrap();
+        let (responses, _) = mpsc::channel();
+        let (commands, _) = mpsc::channel();
+        let (_, events) = mpsc::channel();
+        let mut state = DaemonState {
+            authentication: Some(Authentication {
+                username: "user".into(),
+                responses,
+                commands,
+                events,
+            }),
+            prompt: None,
+            authenticated: true,
+            greeter_stopped: false,
+            pending_session: None,
+            session_starting: false,
+            session_started: false,
+        };
+        assert_eq!(
+            state.select_session("blair".into(), &directory).unwrap(),
+            Response::Status {
+                version: PROTOCOL_VERSION,
+                status: "session_queued"
+            }
+        );
+        assert_eq!(state.pending_session, Some(vec!["/usr/bin/blair".into()]));
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
