@@ -1,5 +1,7 @@
 use std::{
-    fs, thread,
+    fs,
+    process::Command,
+    thread,
     time::{Duration, Instant},
 };
 
@@ -7,23 +9,23 @@ use alphin::client::Client;
 use anyhow::{bail, Context, Result};
 
 const SOCKET: &str = "/run/alphin/alphind.sock";
+const SESSION_UID: u32 = 1000;
 
 fn main() -> Result<()> {
     wait_for_phase("greeter", Duration::from_secs(45))?;
     let client = Client::new(SOCKET);
     require_user(&client, "coconut")?;
-    require_session(&client, "alphin-e2e")?;
-    client.begin_authentication("coconut")?;
-    wait_for_prompt(&client, Duration::from_secs(10))?;
-    client.respond("coconut".to_owned())?;
-    wait_for_phase("authenticated", Duration::from_secs(10))?;
-    client.start_session("alphin-e2e")?;
-    fs::write("/run/alphin/.alphin-e2e-stop-greeter", [])?;
-    wait_for_phase("session_running", Duration::from_secs(30))?;
-    fs::remove_file("/run/alphin/.alphin-e2e-stop-greeter")?;
-    kill_process("alphin-e2e-sess")?;
+    require_session(&client, "coconut")?;
+    thread::sleep(Duration::from_secs(2));
+    click_sign_in()?;
+    thread::sleep(Duration::from_secs(1));
+    enter_password()?;
+    wait_for_phase("session_running", Duration::from_secs(45))?;
+    require_process("blair", SESSION_UID)?;
+    kill_process("blair", SESSION_UID)?;
     wait_for_phase("greeter", Duration::from_secs(45))?;
-    println!("ALPHIN_E2E_OK boot greeter pam handoff logout recovery");
+    require_process("coconut-greete", account_uid("alphin")?)?;
+    println!("ALPHIN_E2E_OK graphical greeter pam handoff coconut logout recovery");
     Ok(())
 }
 
@@ -37,19 +39,6 @@ fn wait_for_phase(expected: &str, timeout: Duration) -> Result<()> {
         }
         if Instant::now() >= deadline {
             bail!("timed out waiting for Alphin phase {expected}");
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
-}
-
-fn wait_for_prompt(client: &Client, timeout: Duration) -> Result<()> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if client.status()?.get("kind").and_then(|v| v.as_str()) == Some("prompt") {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            bail!("timed out waiting for PAM prompt");
         }
         thread::sleep(Duration::from_millis(100));
     }
@@ -79,8 +68,44 @@ fn require_session(client: &Client, id: &str) -> Result<()> {
     }
 }
 
-fn kill_process(name: &str) -> Result<()> {
-    let mut candidates = Vec::new();
+fn click_sign_in() -> Result<()> {
+    run_wtype(["-M", "683", "404", "-P", "1", "-R", "1"])
+}
+
+fn enter_password() -> Result<()> {
+    run_wtype(["-s", "25", "coconut", "-k", "Return"])
+}
+
+fn run_wtype(arguments: impl IntoIterator<Item = &'static str>) -> Result<()> {
+    let status = Command::new("/usr/bin/setpriv")
+        .args(["--reuid=alphin", "--regid=alphin", "--init-groups"])
+        .arg("/usr/bin/wtype")
+        .args(arguments)
+        .env("XDG_RUNTIME_DIR", "/run/alphin")
+        .env("WAYLAND_DISPLAY", "wayland-0")
+        .status()
+        .context("run Wayland input driver")?;
+    if status.success() {
+        Ok(())
+    } else {
+        bail!("Wayland input driver exited with {status}")
+    }
+}
+
+fn require_process(name: &str, uid: u32) -> Result<()> {
+    process_pid(name, uid).map(|_| ())
+}
+
+fn kill_process(name: &str, uid: u32) -> Result<()> {
+    let pid = process_pid(name, uid)?;
+    if unsafe { libc::kill(pid, libc::SIGTERM) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error()).context("terminate desktop session")
+    }
+}
+
+fn process_pid(name: &str, uid: u32) -> Result<i32> {
     for entry in fs::read_dir("/proc").context("read process table")? {
         let entry = entry?;
         let Ok(pid) = entry.file_name().to_string_lossy().parse::<i32>() else {
@@ -92,21 +117,43 @@ fn kill_process(name: &str) -> Result<()> {
         let Ok(status) = fs::read_to_string(entry.path().join("status")) else {
             continue;
         };
-        let comm = comm.trim();
-        if comm.starts_with("alphin-e2e-") {
-            candidates.push(format!("{pid}:{comm}"));
-        }
-        if comm == name {
-            if status.lines().any(|line| line == "State:\tZ (zombie)") {
-                continue;
-            }
-            if unsafe { libc::kill(pid, libc::SIGTERM) } == 0 {
-                return Ok(());
-            }
+        if comm.trim() == name && process_uid(&status) == Some(uid) {
+            return Ok(pid);
         }
     }
-    bail!(
-        "process {name} is not running; E2E candidates: {}",
-        candidates.join(", ")
-    )
+    bail!("process {name} for uid {uid} is not running")
+}
+
+fn account_uid(username: &str) -> Result<u32> {
+    fs::read_to_string("/etc/passwd")?
+        .lines()
+        .find_map(|line| {
+            let mut fields = line.split(':');
+            (fields.next()? == username).then(|| fields.nth(1)?.parse().ok())?
+        })
+        .context("read account uid")
+}
+
+fn process_uid(status: &str) -> Option<u32> {
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("Uid:\t"))?
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_process_owner_from_proc_status() {
+        assert_eq!(
+            process_uid("Name:\tblair\nUid:\t1000\t1000\t1000\t1000\n"),
+            Some(1000)
+        );
+        assert_eq!(process_uid("Name:\tblair\n"), None);
+    }
 }
