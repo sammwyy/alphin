@@ -1,4 +1,4 @@
-use std::{fs, path::Path};
+use std::{fs, os::unix::fs::PermissionsExt, path::Path};
 
 use anyhow::{bail, Context, Result};
 
@@ -58,7 +58,16 @@ fn parse(source: &str, path: &Path) -> Result<Option<Session>> {
             fields.insert(key.trim(), value.trim());
         }
     }
-    if fields.get("Type") != Some(&"Application") || matches!(fields.get("Hidden"), Some(&"true")) {
+    if fields.get("Type") != Some(&"Application")
+        || matches!(fields.get("Hidden"), Some(&"true"))
+        || matches!(fields.get("NoDisplay"), Some(&"true"))
+    {
+        return Ok(None);
+    }
+    if fields
+        .get("TryExec")
+        .is_some_and(|executable| !is_executable(executable))
+    {
         return Ok(None);
     }
     let id = path
@@ -79,6 +88,21 @@ fn parse(source: &str, path: &Path) -> Result<Option<Session>> {
         name,
         command,
     }))
+}
+
+fn is_executable(value: &str) -> bool {
+    let candidates = if value.contains('/') {
+        vec![Path::new(value).to_path_buf()]
+    } else {
+        ["/usr/local/bin", "/usr/bin", "/bin"]
+            .into_iter()
+            .map(|directory| Path::new(directory).join(value))
+            .collect()
+    };
+    candidates.into_iter().any(|path| {
+        fs::metadata(path)
+            .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+    })
 }
 
 fn parse_exec(value: &str) -> Result<Vec<String>> {
@@ -167,5 +191,21 @@ mod tests {
     #[test]
     fn rejects_relative_path_executables() {
         assert!(parse_exec("bin/session").is_err());
+    }
+
+    #[test]
+    fn ignores_hidden_and_unavailable_sessions() {
+        assert!(parse(
+            "[Desktop Entry]\nType=Application\nNoDisplay=true\nExec=/usr/bin/true\n",
+            Path::new("hidden.desktop")
+        )
+        .unwrap()
+        .is_none());
+        assert!(parse(
+            "[Desktop Entry]\nType=Application\nTryExec=/not-installed\nExec=/usr/bin/true\n",
+            Path::new("missing.desktop")
+        )
+        .unwrap()
+        .is_none());
     }
 }
