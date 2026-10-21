@@ -17,6 +17,7 @@ use std::{
 use anyhow::{bail, Context, Result};
 
 use crate::{
+    config::UserPolicy,
     identity::{self, Account},
     ipc::{Request, Response, SessionInfo, UserInfo, PROTOCOL_VERSION},
     logind,
@@ -148,6 +149,7 @@ enum WorkerState {
 pub fn serve(
     socket_path: &Path,
     sessions_path: &Path,
+    user_policy: UserPolicy,
     worker: Option<WorkerMonitor>,
 ) -> Result<()> {
     let expected_gid = socket_directory_gid(socket_path)?;
@@ -168,13 +170,21 @@ pub fn serve(
     }
     fs::set_permissions(socket_path, fs::Permissions::from_mode(0o660))?;
     let expected_uid = fs::metadata(socket_path)?.uid();
-    serve_listener(listener, sessions_path, worker, expected_uid, expected_gid)
+    serve_listener(
+        listener,
+        sessions_path,
+        user_policy,
+        worker,
+        expected_uid,
+        expected_gid,
+    )
 }
 
 pub fn serve_activated(
     socket_fd: RawFd,
     socket_path: &Path,
     sessions_path: &Path,
+    user_policy: UserPolicy,
     worker: Option<WorkerMonitor>,
 ) -> Result<()> {
     let expected_gid = socket_directory_gid(socket_path)?;
@@ -194,6 +204,7 @@ pub fn serve_activated(
     serve_listener(
         listener,
         sessions_path,
+        user_policy,
         worker,
         socket_metadata.uid(),
         expected_gid,
@@ -203,11 +214,15 @@ pub fn serve_activated(
 fn serve_listener(
     listener: UnixListener,
     sessions_path: &Path,
+    user_policy: UserPolicy,
     worker: Option<WorkerMonitor>,
     expected_uid: u32,
     expected_gid: u32,
 ) -> Result<()> {
-    let mut state = DaemonState::default();
+    let mut state = DaemonState {
+        user_policy,
+        ..Default::default()
+    };
     let mut worker = worker;
     loop {
         if let Some(worker) = &mut worker {
@@ -304,17 +319,13 @@ fn handle(request: Request, sessions_path: &Path, state: &mut DaemonState) -> Re
         },
         Request::ListUsers { .. } => Ok(Response::Users {
             version: PROTOCOL_VERSION,
-            users: users::discover(
-                Path::new("/etc/passwd"),
-                users::MINIMUM_UID,
-                users::MAXIMUM_UID,
-            )?
-            .into_iter()
-            .map(|user| UserInfo {
-                username: user.username,
-                display_name: user.display_name,
-            })
-            .collect(),
+            users: users::discover(Path::new("/etc/passwd"), &state.user_policy)?
+                .into_iter()
+                .map(|user| UserInfo {
+                    username: user.username,
+                    display_name: user.display_name,
+                })
+                .collect(),
         }),
         Request::ListSessions { .. } => Ok(Response::Sessions {
             version: PROTOCOL_VERSION,
@@ -363,6 +374,7 @@ struct DaemonState {
     session_starting: bool,
     session_started: bool,
     restart_required: bool,
+    user_policy: UserPolicy,
 }
 
 struct Authentication {
@@ -422,7 +434,7 @@ impl DaemonState {
                 code: "invalid_username",
             });
         }
-        if !users::is_eligible(Path::new("/etc/passwd"), &username)? {
+        if !users::is_eligible(Path::new("/etc/passwd"), &username, &self.user_policy)? {
             return Ok(Response::Error {
                 version: PROTOCOL_VERSION,
                 code: "ineligible_user",
@@ -714,6 +726,7 @@ mod tests {
             session_starting: false,
             session_started: false,
             restart_required: false,
+            user_policy: Default::default(),
         };
         assert_eq!(
             handle(
@@ -790,6 +803,7 @@ mod tests {
             session_starting: false,
             session_started: false,
             restart_required: false,
+            user_policy: Default::default(),
         };
         assert_eq!(
             state.select_session("blair".into(), &directory).unwrap(),
@@ -866,6 +880,7 @@ mod tests {
             session_starting: false,
             session_started: true,
             restart_required: false,
+            user_policy: Default::default(),
         };
         state.pump();
         assert!(state.restart_required);

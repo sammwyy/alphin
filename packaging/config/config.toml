@@ -4,3 +4,8 @@ worker = "/usr/lib/alphin/alphin-worker"
 compositor = "/usr/lib/alphin/compositors/blair.toml"
 greeter = "/usr/lib/alphin/greeters/coconut.toml"
 runtime_dir = "/run/alphin"
+
+[users]
+minimum_uid = 1000
+maximum_uid = 60000
+hidden = []

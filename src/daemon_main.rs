@@ -22,9 +22,10 @@ fn main() -> Result<()> {
             socket_fd,
             &config.socket,
             &config.sessions,
+            config.users,
             Some(worker),
         ),
-        None => alphin::daemon::serve(&config.socket, &config.sessions, Some(worker)),
+        None => alphin::daemon::serve(&config.socket, &config.sessions, config.users, Some(worker)),
     }
 }
 

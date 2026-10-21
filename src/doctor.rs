@@ -53,6 +53,7 @@ mod tests {
             compositor: root.join("compositor.toml"),
             greeter: root.join("greeter.toml"),
             runtime_dir: PathBuf::from("/run/alphin"),
+            users: Default::default(),
         })
         .unwrap();
         fs::remove_dir_all(root).unwrap();

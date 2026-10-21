@@ -16,6 +16,37 @@ pub struct Config {
     pub compositor: PathBuf,
     pub greeter: PathBuf,
     pub runtime_dir: PathBuf,
+    #[serde(default)]
+    pub users: UserPolicy,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct UserPolicy {
+    #[serde(default = "default_minimum_uid")]
+    pub minimum_uid: u32,
+    #[serde(default = "default_maximum_uid")]
+    pub maximum_uid: u32,
+    #[serde(default)]
+    pub hidden: Vec<String>,
+}
+
+impl Default for UserPolicy {
+    fn default() -> Self {
+        Self {
+            minimum_uid: default_minimum_uid(),
+            maximum_uid: default_maximum_uid(),
+            hidden: Vec::new(),
+        }
+    }
+}
+
+fn default_minimum_uid() -> u32 {
+    1000
+}
+
+fn default_maximum_uid() -> u32 {
+    60_000
 }
 
 impl Config {
@@ -57,6 +88,16 @@ impl Config {
         if !self.greeter.starts_with("/usr/lib/alphin/greeters") {
             bail!("greeter adapter must be installed under /usr/lib/alphin/greeters");
         }
+        if self.users.minimum_uid > self.users.maximum_uid {
+            bail!("minimum user UID must not exceed maximum user UID");
+        }
+        if self.users.hidden.iter().any(|username| {
+            username.is_empty()
+                || username.contains(':')
+                || username.bytes().any(|byte| byte.is_ascii_control())
+        }) {
+            bail!("hidden user list contains an invalid username");
+        }
         Ok(())
     }
 }
@@ -92,6 +133,12 @@ mod tests {
     #[test]
     fn rejects_adapters_outside_package_roots() {
         let config: Config = toml::from_str("socket = '/run/alphin/socket'\nsessions = '/sessions'\nworker = '/worker'\ncompositor = '/tmp/compositor.toml'\ngreeter = '/tmp/greeter.toml'\nruntime_dir = '/run/alphin'\n").unwrap();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_inverted_user_uid_range() {
+        let config: Config = toml::from_str("socket = '/run/alphin/socket'\nsessions = '/sessions'\nworker = '/worker'\ncompositor = '/usr/lib/alphin/compositors/blair.toml'\ngreeter = '/usr/lib/alphin/greeters/coconut.toml'\nruntime_dir = '/run/alphin'\n[users]\nminimum_uid = 2000\nmaximum_uid = 1000\n").unwrap();
         assert!(config.validate().is_err());
     }
 }

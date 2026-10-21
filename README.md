@@ -25,7 +25,8 @@ adapter uses `blair --profile greeter`; that profile reads only
 
 `/etc/alphin/config.toml` selects the socket, runtime directory, session
 catalogue, worker executable, and installed adapters. Every configured path
-must be absolute.
+must be absolute. Its `[users]` policy controls the visible local UID range and
+an explicit hidden-user list; the same policy is enforced for PAM admission.
 
 ## Session catalogue
 

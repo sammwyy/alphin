@@ -2,6 +2,8 @@ use std::{fs, path::Path};
 
 use anyhow::{Context, Result};
 
+use crate::config::UserPolicy;
+
 pub const MINIMUM_UID: u32 = 1000;
 pub const MAXIMUM_UID: u32 = 60_000;
 
@@ -11,12 +13,12 @@ pub struct User {
     pub display_name: String,
 }
 
-pub fn discover(path: &Path, minimum_uid: u32, maximum_uid: u32) -> Result<Vec<User>> {
+pub fn discover(path: &Path, policy: &UserPolicy) -> Result<Vec<User>> {
     let source =
         fs::read_to_string(path).with_context(|| format!("read passwd file {}", path.display()))?;
     let mut users = source
         .lines()
-        .filter_map(|line| parse(line, minimum_uid, maximum_uid))
+        .filter_map(|line| parse(line, policy))
         .collect::<Vec<_>>();
     users.sort_by(|left, right| {
         left.display_name
@@ -26,13 +28,13 @@ pub fn discover(path: &Path, minimum_uid: u32, maximum_uid: u32) -> Result<Vec<U
     Ok(users)
 }
 
-pub fn is_eligible(path: &Path, username: &str) -> Result<bool> {
-    Ok(discover(path, MINIMUM_UID, MAXIMUM_UID)?
+pub fn is_eligible(path: &Path, username: &str, policy: &UserPolicy) -> Result<bool> {
+    Ok(discover(path, policy)?
         .iter()
         .any(|user| user.username == username))
 }
 
-fn parse(line: &str, minimum_uid: u32, maximum_uid: u32) -> Option<User> {
+fn parse(line: &str, policy: &UserPolicy) -> Option<User> {
     let mut fields = line.split(':');
     let username = fields.next()?;
     fields.next()?;
@@ -42,7 +44,8 @@ fn parse(line: &str, minimum_uid: u32, maximum_uid: u32) -> Option<User> {
     fields.next()?;
     let shell = fields.next()?;
     if username.is_empty()
-        || !(minimum_uid..=maximum_uid).contains(&uid)
+        || !(policy.minimum_uid..=policy.maximum_uid).contains(&uid)
+        || policy.hidden.iter().any(|hidden| hidden == username)
         || shell.ends_with("nologin")
         || shell.ends_with("false")
     {
@@ -68,19 +71,26 @@ mod tests {
     fn excludes_system_and_non_login_accounts() {
         assert!(parse(
             "daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin",
-            1000,
-            60000
+            &UserPolicy::default()
         )
         .is_none());
         assert_eq!(
             parse(
                 "alex:x:1000:1000:Alex Doe,,,:/home/alex:/bin/bash",
-                1000,
-                60000
+                &UserPolicy::default()
             )
             .unwrap()
             .display_name,
             "Alex Doe"
         );
+    }
+
+    #[test]
+    fn applies_hidden_user_policy() {
+        let policy = UserPolicy {
+            hidden: vec!["alex".into()],
+            ..Default::default()
+        };
+        assert!(parse("alex:x:1000:1000:Alex:/home/alex:/bin/bash", &policy).is_none());
     }
 }
