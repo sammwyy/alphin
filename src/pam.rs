@@ -435,4 +435,12 @@ mod tests {
         assert!(service.lines().any(|line| line.contains("pam_systemd.so")));
         assert!(service.lines().any(|line| line.contains("system-auth")));
     }
+
+    #[test]
+    fn daemon_service_disables_core_dumps() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("packaging/systemd/alphind.service");
+        let service = fs::read_to_string(path).unwrap();
+        assert!(service.lines().any(|line| line == "LimitCORE=0"));
+    }
 }
