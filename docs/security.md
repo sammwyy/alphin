@@ -21,6 +21,19 @@ be delivered only over the private socket.
 The daemon accepts authentication only for eligible local accounts: UID 1000
 through 60000, with a login shell that is not `nologin` or `false`.
 
+## Authorization boundaries
+
+The greeter may request authentication, session selection, and a power action,
+but it never authorizes any of them. Alphind accepts authentication only for
+eligible local accounts and starts only package-discovered sessions for the
+authenticated account.
+
+Seat ownership, VT switching, suspend, hibernate, reboot, and power-off are
+owned by systemd-logind. Alphind must call its logind APIs for those operations
+and rely on logind and polkit for authorization; it must not invoke system
+commands or treat greeter IPC membership as authorization. Until that backend
+is enabled, `PowerAction` is rejected.
+
 The greeter worker must stop its compositor before a desktop session starts.
 Alphind owns the worker and accepts its completion only from a private control
 file descriptor that is closed before the UI executes. A selected session is
