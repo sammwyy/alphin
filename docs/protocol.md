@@ -13,7 +13,7 @@ BeginAuthentication      → Status
 Respond                  → Status
 Cancel                   → Status
 StartSession             → Status
-PowerAction              → Error until logind policy is enabled
+PowerAction              → Status after an authorized logind request, otherwise Error
 ```
 
 `BeginAuthentication` starts a PAM conversation for an eligible account.

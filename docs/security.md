@@ -25,8 +25,8 @@ through 60000, with a login shell that is not `nologin` or `false`.
 
 The greeter may request authentication, session selection, and a power action,
 but it never authorizes any of them. Alphind accepts authentication only for
-eligible local accounts and starts only package-discovered sessions for the
-authenticated account.
+eligible local accounts, starts only package-discovered sessions for the
+authenticated account, and permits a power request only after authentication.
 
 Seat ownership, VT switching, suspend, hibernate, reboot, and power-off are
 owned by systemd-logind. Alphind must call its logind APIs for those operations
