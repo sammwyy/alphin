@@ -141,4 +141,12 @@ mod tests {
         let config: Config = toml::from_str("socket = '/run/alphin/socket'\nsessions = '/sessions'\nworker = '/worker'\ncompositor = '/usr/lib/alphin/compositors/blair.toml'\ngreeter = '/usr/lib/alphin/greeters/coconut.toml'\nruntime_dir = '/run/alphin'\n[users]\nminimum_uid = 2000\nmaximum_uid = 1000\n").unwrap();
         assert!(config.validate().is_err());
     }
+
+    #[test]
+    fn packaged_socket_is_restricted_to_the_greeter_account() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("packaging/systemd/alphind.socket");
+        let unit = fs::read_to_string(path).unwrap();
+        assert!(unit.lines().any(|line| line == "SocketGroup=alphin"));
+        assert!(unit.lines().any(|line| line == "SocketMode=0660"));
+    }
 }
