@@ -159,4 +159,18 @@ mod tests {
         .is_err());
         assert!(greeter.try_wait().unwrap().is_some());
     }
+
+    #[test]
+    fn terminates_compositor_after_greeter_exit() {
+        let mut compositor = Command::new("/usr/bin/sleep").arg("5").spawn().unwrap();
+        let mut greeter = Command::new("/usr/bin/true").spawn().unwrap();
+        supervise(
+            &mut compositor,
+            &mut greeter,
+            Duration::ZERO,
+            Duration::ZERO,
+        )
+        .unwrap();
+        assert!(compositor.try_wait().unwrap().is_some());
+    }
 }
