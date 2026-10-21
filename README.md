@@ -23,6 +23,10 @@ accept commands from clients or per-user configuration. The included Blair
 adapter uses `blair --profile greeter`; that profile reads only
 `/etc/blair/greeter.toml`, never user Blair configuration.
 
+`/etc/alphin/config.toml` selects the socket, runtime directory, session
+catalogue, worker executable, and installed adapters. Every configured path
+must be absolute.
+
 ## Session catalogue
 
 Wayland sessions are discovered from `/usr/share/wayland-sessions`. Alphin

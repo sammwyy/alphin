@@ -4,6 +4,6 @@ After=systemd-logind.service systemd-tmpfiles-setup.service
 
 [Service]
 Type=simple
-ExecStart=/usr/lib/alphin/alphind --socket /run/alphin/alphind.sock --sessions /usr/share/wayland-sessions --worker /usr/lib/alphin/alphin-worker --compositor /usr/lib/alphin/compositors/blair.toml --greeter /usr/lib/alphin/greeters/coconut.toml --runtime-dir /run/alphin
+ExecStart=/usr/lib/alphin/alphind --config /etc/alphin/config.toml
 Restart=on-failure
 RestartSec=2
