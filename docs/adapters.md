@@ -18,6 +18,10 @@ kind = "wayland_socket"
 timeout_seconds = 20
 ```
 
+Greeter adapters also declare `ipc_version = 1` and any supported capabilities:
+`users`, `sessions`, `authentication`, `power`, `languages`, and
+`accessibility`.
+
 `id` contains lowercase ASCII letters, digits, and hyphens. `executable` is an
 absolute path. Arguments and environment values are literal values passed to
 `exec`; no shell expansion is performed. Readiness and shutdown timeouts are

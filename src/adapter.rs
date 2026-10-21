@@ -17,6 +17,9 @@ pub struct Adapter {
     pub arguments: Vec<String>,
     #[serde(default)]
     pub environment: BTreeMap<String, String>,
+    pub ipc_version: Option<u16>,
+    #[serde(default)]
+    pub capabilities: Vec<Capability>,
     pub readiness: Readiness,
     #[serde(default)]
     pub shutdown_timeout_seconds: u64,
@@ -26,6 +29,17 @@ pub struct Adapter {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Readiness {
     WaylandSocket { timeout_seconds: u64 },
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum Capability {
+    Users,
+    Sessions,
+    Authentication,
+    Power,
+    Languages,
+    Accessibility,
 }
 
 impl Adapter {
@@ -72,6 +86,14 @@ impl Adapter {
         }) {
             bail!("adapter environment contains an invalid name or value");
         }
+        if self.ipc_version.is_some_and(|version| version != 1) {
+            bail!("adapter IPC version is unsupported");
+        }
+        let mut capabilities = self.capabilities.clone();
+        capabilities.sort();
+        if capabilities.windows(2).any(|pair| pair[0] == pair[1]) {
+            bail!("adapter capabilities must not contain duplicates");
+        }
         match self.readiness {
             Readiness::WaylandSocket { timeout_seconds }
                 if timeout_seconds == 0 || timeout_seconds > 120 =>
@@ -107,6 +129,15 @@ mod tests {
         )
         .unwrap();
         adapter.validate().unwrap();
+    }
+
+    #[test]
+    fn rejects_duplicate_capabilities() {
+        let adapter: Adapter = toml::from_str(
+            "id = 'greeter'\nexecutable = '/usr/bin/greeter'\nipc_version = 1\ncapabilities = ['users', 'users']\nshutdown_timeout_seconds = 5\n[readiness]\nkind = 'wayland_socket'\ntimeout_seconds = 5\n",
+        )
+        .unwrap();
+        assert!(adapter.validate().is_err());
     }
 
     #[test]
