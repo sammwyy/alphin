@@ -2,6 +2,7 @@ use std::{
     fs,
     io::{BufRead, BufReader, Read, Write},
     os::unix::{
+        ffi::OsStrExt,
         fs::{FileTypeExt, MetadataExt, PermissionsExt},
         io::AsRawFd,
         net::{UnixListener, UnixStream},
@@ -31,15 +32,25 @@ pub fn serve(socket_path: &Path, sessions_path: &Path) -> Result<()> {
         }
         fs::remove_file(socket_path)?;
     }
+    let parent = socket_path
+        .parent()
+        .context("private socket has no parent directory")?;
+    let expected_gid = fs::metadata(parent)?.gid();
     let listener = UnixListener::bind(socket_path)
         .with_context(|| format!("bind private socket {}", socket_path.display()))?;
-    fs::set_permissions(socket_path, fs::Permissions::from_mode(0o600))?;
+    let path = std::ffi::CString::new(socket_path.as_os_str().as_bytes())
+        .context("invalid private socket path")?;
+    if unsafe { libc::chown(path.as_ptr(), 0, expected_gid) } != 0 {
+        return Err(std::io::Error::last_os_error()).context("set private socket ownership");
+    }
+    fs::set_permissions(socket_path, fs::Permissions::from_mode(0o660))?;
     let expected_uid = fs::metadata(socket_path)?.uid();
     let mut state = DaemonState::default();
     for connection in listener.incoming() {
         match connection {
             Ok(stream) => {
-                if peer_uid(&stream)? == expected_uid {
+                let peer = peer_credentials(&stream)?;
+                if peer.uid == expected_uid || peer.gid == expected_gid {
                     serve_connection(stream, sessions_path, &mut state)?;
                 }
             }
@@ -259,7 +270,12 @@ impl DaemonState {
     }
 }
 
-fn peer_uid(stream: &UnixStream) -> Result<u32> {
+struct PeerCredentials {
+    uid: u32,
+    gid: u32,
+}
+
+fn peer_credentials(stream: &UnixStream) -> Result<PeerCredentials> {
     let mut credentials = std::mem::MaybeUninit::<libc::ucred>::zeroed();
     let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
     let result = unsafe {
@@ -274,7 +290,11 @@ fn peer_uid(stream: &UnixStream) -> Result<u32> {
     if result != 0 || length as usize != std::mem::size_of::<libc::ucred>() {
         return Err(std::io::Error::last_os_error()).context("read Unix peer credentials");
     }
-    Ok(unsafe { credentials.assume_init().uid })
+    let credentials = unsafe { credentials.assume_init() };
+    Ok(PeerCredentials {
+        uid: credentials.uid,
+        gid: credentials.gid,
+    })
 }
 
 #[cfg(test)]

@@ -34,8 +34,11 @@ without a shell, and removes desktop-entry field codes before execution.
 The greeter compositor and UI run under the dedicated `alphin` account. Their
 runtime directory is `/run/alphin` with mode `0700`; adapter files and
 `/etc/alphin` are root-owned and not writable by the greeter or desktop users.
-The worker clears inherited environment variables and supplies only its runtime
-directory, a fixed PATH, and adapter-declared variables.
+`alphind` runs with the privileges required by PAM and session setup. Its socket
+is group-readable and writable only by the dedicated `alphin` group, and it
+verifies Unix peer credentials before processing a request. The worker clears
+inherited environment variables and supplies only its runtime directory, a
+fixed PATH, and adapter-declared variables.
 
 The daemon socket is private to the `alphin` account and authenticates the peer
 with Unix credentials before accepting protocol messages. Its versioned JSON
