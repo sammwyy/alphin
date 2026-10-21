@@ -4,6 +4,7 @@ use std::{
     os::raw::{c_char, c_int, c_void},
     path::Path,
     ptr,
+    sync::mpsc::{Receiver, Sender},
 };
 
 use anyhow::{bail, Context, Result};
@@ -104,9 +105,7 @@ impl Transaction {
     ) -> Result<Self> {
         let service = CString::new(service).context("invalid PAM service name")?;
         let username = CString::new(username).context("invalid PAM username")?;
-        let mut conversation_data = Conversation {
-            responses: responses.into(),
-        };
+        let mut conversation_data = Conversation::with_responses(responses);
         let conversation = PamConversation {
             callback: conversation,
             data: (&mut conversation_data as *mut Conversation).cast(),
@@ -136,6 +135,41 @@ impl Transaction {
             },
         };
         check(handle, status, "start PAM transaction")?;
+        let transaction = Self {
+            handle,
+            session_open: false,
+            credentials_established: false,
+        };
+        transaction.run_authentication()?;
+        Ok(transaction)
+    }
+
+    pub fn authenticate_interactive(
+        service: &str,
+        username: &str,
+        prompts: Sender<Prompt>,
+        responses: Receiver<Secret>,
+    ) -> Result<Self> {
+        let service = CString::new(service).context("invalid PAM service name")?;
+        let username = CString::new(username).context("invalid PAM username")?;
+        let mut conversation_data = Conversation::interactive(prompts, responses);
+        let conversation = PamConversation {
+            callback: conversation,
+            data: (&mut conversation_data as *mut Conversation).cast(),
+        };
+        let mut handle = ptr::null_mut();
+        check(
+            handle,
+            unsafe {
+                pam_start(
+                    service.as_ptr(),
+                    username.as_ptr(),
+                    &conversation,
+                    &mut handle,
+                )
+            },
+            "start PAM transaction",
+        )?;
         let transaction = Self {
             handle,
             session_open: false,
@@ -196,8 +230,57 @@ impl Drop for Transaction {
     }
 }
 
+pub struct Prompt {
+    pub message: String,
+    pub echo: bool,
+}
+
+enum Responder {
+    Static(VecDeque<Secret>),
+    Interactive {
+        prompts: Sender<Prompt>,
+        responses: Receiver<Secret>,
+    },
+}
+
 struct Conversation {
-    responses: VecDeque<Secret>,
+    responder: Responder,
+}
+
+impl Conversation {
+    fn with_responses(responses: Vec<Secret>) -> Self {
+        Self {
+            responder: Responder::Static(responses.into()),
+        }
+    }
+
+    fn interactive(prompts: Sender<Prompt>, responses: Receiver<Secret>) -> Self {
+        Self {
+            responder: Responder::Interactive { prompts, responses },
+        }
+    }
+
+    fn response(&mut self, message: &PamMessage) -> Option<Secret> {
+        match &mut self.responder {
+            Responder::Static(responses) => responses.pop_front(),
+            Responder::Interactive { prompts, responses } => {
+                let prompt_message = if message.message.is_null() {
+                    String::new()
+                } else {
+                    unsafe { CStr::from_ptr(message.message) }
+                        .to_string_lossy()
+                        .into_owned()
+                };
+                prompts
+                    .send(Prompt {
+                        message: prompt_message,
+                        echo: message.style == PAM_PROMPT_ECHO_ON,
+                    })
+                    .ok()?;
+                responses.recv().ok()
+            }
+        }
+    }
 }
 
 unsafe extern "C" fn conversation(
@@ -226,36 +309,38 @@ unsafe extern "C" fn conversation(
         }
         let response = unsafe { allocated.add(index) };
         match unsafe { (*message).style } {
-            PAM_PROMPT_ECHO_OFF | PAM_PROMPT_ECHO_ON => match conversation.responses.pop_front() {
-                Some(mut secret) => {
-                    let value = match CString::new(secret.0.as_slice()) {
-                        Ok(value) => value,
-                        Err(_) => {
-                            secret.0.zeroize();
+            PAM_PROMPT_ECHO_OFF | PAM_PROMPT_ECHO_ON => {
+                match conversation.response(unsafe { &*message }) {
+                    Some(mut secret) => {
+                        let value = match CString::new(secret.0.as_slice()) {
+                            Ok(value) => value,
+                            Err(_) => {
+                                secret.0.zeroize();
+                                unsafe {
+                                    libc::free(allocated.cast());
+                                }
+                                return PAM_CONV_ERR;
+                            }
+                        };
+                        secret.0.zeroize();
+                        unsafe {
+                            (*response).response = libc::strdup(value.as_ptr());
+                        }
+                        if unsafe { (*response).response }.is_null() {
                             unsafe {
                                 libc::free(allocated.cast());
                             }
                             return PAM_CONV_ERR;
                         }
-                    };
-                    secret.0.zeroize();
-                    unsafe {
-                        (*response).response = libc::strdup(value.as_ptr());
                     }
-                    if unsafe { (*response).response }.is_null() {
+                    None => {
                         unsafe {
                             libc::free(allocated.cast());
                         }
                         return PAM_CONV_ERR;
                     }
                 }
-                None => {
-                    unsafe {
-                        libc::free(allocated.cast());
-                    }
-                    return PAM_CONV_ERR;
-                }
-            },
+            }
             _ => {}
         }
     }
