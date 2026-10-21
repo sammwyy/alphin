@@ -38,10 +38,19 @@ fn wait_for_phase(expected: &str, timeout: Duration) -> Result<()> {
             }
         }
         if Instant::now() >= deadline {
-            bail!("timed out waiting for Alphin phase {expected}");
+            bail!(
+                "timed out waiting for Alphin phase {expected}: {}",
+                greeter_log()
+            );
         }
         thread::sleep(Duration::from_millis(100));
     }
+}
+
+fn greeter_log() -> String {
+    fs::read_to_string("/run/alphin/state/blair/compositor.log")
+        .map(|log| log.lines().rev().take(20).collect::<Vec<_>>().join("\n"))
+        .unwrap_or_else(|error| format!("no Blair log: {error}"))
 }
 
 fn require_user(client: &Client, username: &str) -> Result<()> {

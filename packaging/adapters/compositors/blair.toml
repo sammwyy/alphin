@@ -3,6 +3,9 @@ executable = "/usr/bin/blair"
 arguments = ["--profile", "greeter"]
 shutdown_timeout_seconds = 10
 
+[environment]
+XDG_STATE_HOME = "/run/alphin/state"
+
 [readiness]
 kind = "wayland_socket"
 timeout_seconds = 20
