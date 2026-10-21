@@ -75,6 +75,7 @@ Install the bundled artifacts at these paths:
 /usr/lib/alphin/alphind
 /usr/lib/alphin/alphin-worker
 /usr/lib/alphin/alphin-doctor
+/usr/bin/coconut-greeter
 /usr/lib/alphin/compositors/blair.toml
 /usr/lib/alphin/greeters/coconut.toml
 /etc/alphin/config.toml
