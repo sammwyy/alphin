@@ -9,12 +9,14 @@ trap 'rm -f "$log"' EXIT
 for file in vmlinuz initramfs.img rootfs.img; do
     test -r "$image_dir/$file" || { echo "missing $image_dir/$file" >&2; exit 2; }
 done
+label=$(blkid -s LABEL -o value "$image_dir/rootfs.img")
+test -n "$label" || { echo "rootfs has no filesystem label" >&2; exit 2; }
 
 set +e
 timeout --preserve-status "$seconds" qemu-system-x86_64 \
     -accel tcg -cpu max -m 2048 -smp 2 \
     -kernel "$image_dir/vmlinuz" -initrd "$image_dir/initramfs.img" \
-    -append 'root=LABEL=COCONUT rw console=ttyS0 selinux=0' \
+    -append "root=LABEL=$label rw console=ttyS0 selinux=0" \
     -drive "file=$image_dir/rootfs.img,format=raw,if=virtio,snapshot=on" \
     -device virtio-vga -display none -serial "file:$log" -no-reboot
 status=$?
