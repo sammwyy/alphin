@@ -408,4 +408,12 @@ mod tests {
     fn rejects_secret_nul_bytes() {
         assert!(Secret::new("bad\0secret".into()).is_err());
     }
+
+    #[test]
+    fn packaged_service_registers_systemd_sessions() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packaging/pam/alphin");
+        let service = fs::read_to_string(path).unwrap();
+        assert!(service.lines().any(|line| line.contains("pam_systemd.so")));
+        assert!(service.lines().any(|line| line.contains("system-auth")));
+    }
 }

@@ -60,7 +60,8 @@ to logs, arguments, or persistent state.
 
 `BeginAuthentication`, `Respond`, and `Cancel` run a Linux-PAM conversation.
 The distribution package must install `/etc/pam.d/alphin` using its established
-system authentication stack. Authentication succeeds only after PAM
+system authentication stack. The bundled Fedora/authselect profile delegates to
+`system-auth` and invokes `pam_systemd`. Authentication succeeds only after PAM
 authentication and account management both succeed.
 
 ## Development
