@@ -4,10 +4,12 @@ use std::{
     os::unix::{
         ffi::OsStrExt,
         fs::{FileTypeExt, MetadataExt, PermissionsExt},
-        io::AsRawFd,
+        io::{AsRawFd, RawFd},
         net::{UnixListener, UnixStream},
+        process::CommandExt,
     },
     path::Path,
+    process::{Child, Command},
     sync::mpsc::{self, Receiver, Sender, TryRecvError},
     thread,
 };
@@ -15,12 +17,138 @@ use std::{
 use anyhow::{bail, Context, Result};
 
 use crate::{
+    identity::Account,
     ipc::{Request, Response, SessionInfo, UserInfo, PROTOCOL_VERSION},
     pam::{self, Secret},
     session, users,
 };
 
-pub fn serve(socket_path: &Path, sessions_path: &Path) -> Result<()> {
+pub struct WorkerMonitor {
+    child: Child,
+    control_fd: RawFd,
+    stopped: bool,
+}
+
+impl WorkerMonitor {
+    pub fn spawn(
+        executable: &Path,
+        compositor: &Path,
+        greeter: &Path,
+        runtime_dir: &Path,
+        account: &Account,
+    ) -> Result<Self> {
+        let mut descriptors = [0; 2];
+        if unsafe { libc::pipe2(descriptors.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
+            return Err(std::io::Error::last_os_error()).context("create worker control pipe");
+        }
+        let groups = account.groups.clone();
+        let uid = account.uid;
+        let gid = account.gid;
+        let mut command = Command::new(executable);
+        command
+            .args(["--compositor"])
+            .arg(compositor)
+            .args(["--greeter"])
+            .arg(greeter)
+            .args(["--runtime-dir"])
+            .arg(runtime_dir)
+            .args(["--control-fd", "3"]);
+        unsafe {
+            command.pre_exec(move || {
+                if libc::dup2(descriptors[1], 3) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if descriptors[0] != 3 {
+                    libc::close(descriptors[0]);
+                }
+                if descriptors[1] != 3 {
+                    libc::close(descriptors[1]);
+                }
+                let groups = groups
+                    .iter()
+                    .map(|group| *group as libc::gid_t)
+                    .collect::<Vec<_>>();
+                if libc::setgroups(groups.len(), groups.as_ptr()) != 0
+                    || libc::setgid(gid) != 0
+                    || libc::setuid(uid) != 0
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let child = match command.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                unsafe {
+                    libc::close(descriptors[0]);
+                    libc::close(descriptors[1]);
+                }
+                return Err(error).context("start greeter worker");
+            }
+        };
+        unsafe {
+            libc::close(descriptors[1]);
+        }
+        let flags = unsafe { libc::fcntl(descriptors[0], libc::F_GETFL) };
+        if flags < 0
+            || unsafe { libc::fcntl(descriptors[0], libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
+        {
+            unsafe {
+                libc::close(descriptors[0]);
+            }
+            return Err(std::io::Error::last_os_error()).context("configure worker control pipe");
+        }
+        Ok(Self {
+            child,
+            control_fd: descriptors[0],
+            stopped: false,
+        })
+    }
+
+    fn poll(&mut self) -> Result<WorkerState> {
+        if self.stopped {
+            return Ok(WorkerState::Stopped);
+        }
+        let mut signal = [0_u8];
+        let read = unsafe { libc::read(self.control_fd, signal.as_mut_ptr().cast(), signal.len()) };
+        if read == 1 && signal == [1] {
+            self.stopped = true;
+            return Ok(WorkerState::Stopped);
+        }
+        if read == 0 {
+            return Ok(WorkerState::Exited(self.child.try_wait()?.is_some()));
+        }
+        if read < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EAGAIN) {
+            return Ok(WorkerState::Running);
+        }
+        Err(std::io::Error::last_os_error()).context("read worker control pipe")
+    }
+}
+
+impl Drop for WorkerMonitor {
+    fn drop(&mut self) {
+        unsafe {
+            libc::close(self.control_fd);
+        }
+        if self.child.try_wait().ok().flatten().is_none() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+}
+
+enum WorkerState {
+    Running,
+    Stopped,
+    Exited(bool),
+}
+
+pub fn serve(
+    socket_path: &Path,
+    sessions_path: &Path,
+    worker: Option<WorkerMonitor>,
+) -> Result<()> {
     let expected_gid = socket_directory_gid(socket_path)?;
     if socket_path.exists() {
         let metadata = fs::symlink_metadata(socket_path)?;
@@ -31,6 +159,7 @@ pub fn serve(socket_path: &Path, sessions_path: &Path) -> Result<()> {
     }
     let listener = UnixListener::bind(socket_path)
         .with_context(|| format!("bind private socket {}", socket_path.display()))?;
+    listener.set_nonblocking(true)?;
     let path = std::ffi::CString::new(socket_path.as_os_str().as_bytes())
         .context("invalid private socket path")?;
     if unsafe { libc::chown(path.as_ptr(), 0, expected_gid) } != 0 {
@@ -39,18 +168,35 @@ pub fn serve(socket_path: &Path, sessions_path: &Path) -> Result<()> {
     fs::set_permissions(socket_path, fs::Permissions::from_mode(0o660))?;
     let expected_uid = fs::metadata(socket_path)?.uid();
     let mut state = DaemonState::default();
-    for connection in listener.incoming() {
-        match connection {
-            Ok(stream) => {
+    let mut worker = worker;
+    loop {
+        if let Some(worker) = &mut worker {
+            match worker.poll()? {
+                WorkerState::Running => {}
+                WorkerState::Stopped => state.greeter_stopped = true,
+                WorkerState::Exited(true) => {
+                    return Err(anyhow::anyhow!(
+                        "greeter worker exited without completion signal"
+                    ))
+                }
+                WorkerState::Exited(false) => {
+                    return Err(anyhow::anyhow!("greeter worker exited before completion"))
+                }
+            }
+        }
+        match listener.accept() {
+            Ok((stream, _)) => {
                 let peer = peer_credentials(&stream)?;
                 if peer.uid == expected_uid || peer.gid == expected_gid {
                     serve_connection(stream, sessions_path, &mut state)?;
                 }
             }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(std::time::Duration::from_millis(10));
+            }
             Err(error) => return Err(error).context("accept private socket connection"),
         }
     }
-    Ok(())
 }
 
 fn socket_directory_gid(socket_path: &Path) -> Result<u32> {
@@ -151,6 +297,7 @@ struct DaemonState {
     authentication: Option<Authentication>,
     prompt: Option<pam::Prompt>,
     authenticated: bool,
+    greeter_stopped: bool,
 }
 
 struct Authentication {
@@ -168,6 +315,8 @@ impl DaemonState {
     fn phase(&self) -> &'static str {
         if self.authenticated {
             "authenticated"
+        } else if self.greeter_stopped {
+            "greeter_stopped"
         } else if self.authentication.is_some() {
             "authenticating"
         } else {
@@ -378,6 +527,7 @@ mod tests {
                 echo: false,
             }),
             authenticated: false,
+            greeter_stopped: false,
         };
         assert_eq!(
             handle(
@@ -405,6 +555,26 @@ mod tests {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
         assert!(socket_directory_gid(&path.join("alphind.sock")).is_err());
         fs::remove_dir(path).unwrap();
+    }
+
+    #[test]
+    fn recognizes_private_worker_completion() {
+        let mut descriptors = [0; 2];
+        assert_eq!(unsafe { libc::pipe(descriptors.as_mut_ptr()) }, 0);
+        assert_eq!(
+            unsafe { libc::write(descriptors[1], [1_u8].as_ptr().cast(), 1) },
+            1
+        );
+        unsafe {
+            libc::close(descriptors[1]);
+        }
+        let mut worker = WorkerMonitor {
+            child: Command::new("/usr/bin/true").spawn().unwrap(),
+            control_fd: descriptors[0],
+            stopped: false,
+        };
+        assert!(matches!(worker.poll().unwrap(), WorkerState::Stopped));
+        assert!(matches!(worker.poll().unwrap(), WorkerState::Stopped));
     }
 
     #[test]
