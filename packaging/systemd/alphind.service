@@ -1,6 +1,8 @@
 [Unit]
 Description=Alphin display manager daemon
 After=systemd-logind.service systemd-tmpfiles-setup.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
