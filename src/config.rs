@@ -51,6 +51,12 @@ impl Config {
                 bail!("{name} must be an absolute path");
             }
         }
+        if !self.compositor.starts_with("/usr/lib/alphin/compositors") {
+            bail!("compositor adapter must be installed under /usr/lib/alphin/compositors");
+        }
+        if !self.greeter.starts_with("/usr/lib/alphin/greeters") {
+            bail!("greeter adapter must be installed under /usr/lib/alphin/greeters");
+        }
         Ok(())
     }
 }
@@ -81,5 +87,11 @@ mod tests {
         .unwrap();
         assert!(Config::load_system(&root).is_err());
         fs::remove_file(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_adapters_outside_package_roots() {
+        let config: Config = toml::from_str("socket = '/run/alphin/socket'\nsessions = '/sessions'\nworker = '/worker'\ncompositor = '/tmp/compositor.toml'\ngreeter = '/tmp/greeter.toml'\nruntime_dir = '/run/alphin'\n").unwrap();
+        assert!(config.validate().is_err());
     }
 }
