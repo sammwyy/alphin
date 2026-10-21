@@ -51,6 +51,11 @@ pub enum Response {
         version: u16,
         status: &'static str,
     },
+    Prompt {
+        version: u16,
+        message: String,
+        echo: bool,
+    },
     Error {
         version: u16,
         code: &'static str,
