@@ -373,10 +373,6 @@ fn handle(request: Request, sessions_path: &Path, state: &mut DaemonState) -> Re
         Request::Respond { response, .. } => state.respond(response),
         Request::Cancel { .. } => Ok(state.cancel()),
         Request::StartSession { session, .. } => state.select_session(session, sessions_path),
-        Request::PowerAction { .. } if !state.authenticated => Ok(Response::Error {
-            version: PROTOCOL_VERSION,
-            code: "authentication_required",
-        }),
         Request::PowerAction { action, .. } => match logind::PowerAction::parse(&action) {
             Ok(action) => match logind::request_power(action) {
                 Ok(()) => Ok(Response::Status {
@@ -875,13 +871,13 @@ mod tests {
     }
 
     #[test]
-    fn requires_authentication_for_power_actions() {
+    fn rejects_invalid_power_actions() {
         let mut state = DaemonState::default();
         assert_eq!(
             handle(
                 Request::PowerAction {
                     version: PROTOCOL_VERSION,
-                    action: "reboot".into(),
+                    action: "invalid".into(),
                 },
                 Path::new("/missing"),
                 &mut state,
@@ -889,7 +885,7 @@ mod tests {
             .unwrap(),
             Response::Error {
                 version: PROTOCOL_VERSION,
-                code: "authentication_required",
+                code: "invalid_power_action",
             }
         );
     }

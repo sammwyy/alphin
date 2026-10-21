@@ -65,6 +65,12 @@ impl Client {
         )
     }
 
+    pub fn power_action(&self, action: &str) -> Result<Value> {
+        self.request(
+            json!({ "method": "power_action", "version": PROTOCOL_VERSION, "action": action }),
+        )
+    }
+
     fn request(&self, request: impl Serialize) -> Result<Value> {
         let mut stream = UnixStream::connect(&self.socket)
             .with_context(|| format!("connect to {}", self.socket.display()))?;
