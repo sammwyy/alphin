@@ -303,7 +303,7 @@ unsafe extern "C" fn conversation(
         let message = unsafe { *messages.add(index) };
         if message.is_null() {
             unsafe {
-                libc::free(allocated.cast());
+                free_responses(allocated, count as usize);
             }
             return PAM_CONV_ERR;
         }
@@ -312,30 +312,31 @@ unsafe extern "C" fn conversation(
             PAM_PROMPT_ECHO_OFF | PAM_PROMPT_ECHO_ON => {
                 match conversation.response(unsafe { &*message }) {
                     Some(mut secret) => {
-                        let value = match CString::new(secret.0.as_slice()) {
-                            Ok(value) => value,
-                            Err(_) => {
-                                secret.0.zeroize();
-                                unsafe {
-                                    libc::free(allocated.cast());
-                                }
-                                return PAM_CONV_ERR;
-                            }
-                        };
-                        secret.0.zeroize();
-                        unsafe {
-                            (*response).response = libc::strdup(value.as_ptr());
-                        }
-                        if unsafe { (*response).response }.is_null() {
+                        let length = secret.0.len();
+                        let value = unsafe { libc::malloc(length + 1) as *mut c_char };
+                        if value.is_null() {
+                            secret.0.zeroize();
                             unsafe {
-                                libc::free(allocated.cast());
+                                free_responses(allocated, count as usize);
                             }
                             return PAM_CONV_ERR;
+                        }
+                        unsafe {
+                            std::ptr::copy_nonoverlapping(
+                                secret.0.as_ptr(),
+                                value.cast::<u8>(),
+                                length,
+                            );
+                            *value.add(length) = 0;
+                        }
+                        secret.0.zeroize();
+                        unsafe {
+                            (*response).response = value;
                         }
                     }
                     None => {
                         unsafe {
-                            libc::free(allocated.cast());
+                            free_responses(allocated, count as usize);
                         }
                         return PAM_CONV_ERR;
                     }
@@ -348,6 +349,17 @@ unsafe extern "C" fn conversation(
         *responses = allocated;
     }
     PAM_SUCCESS
+}
+
+unsafe fn free_responses(responses: *mut PamResponse, count: usize) {
+    for index in 0..count {
+        unsafe {
+            libc::free((*responses.add(index)).response.cast());
+        }
+    }
+    unsafe {
+        libc::free(responses.cast());
+    }
 }
 
 fn check(handle: *mut PamHandle, status: c_int, operation: &str) -> Result<()> {
