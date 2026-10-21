@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeSet,
     fs,
-    os::unix::process::CommandExt,
+    os::unix::{fs::MetadataExt, process::CommandExt},
     path::{Path, PathBuf},
     process::{Child, Command},
 };
@@ -43,9 +43,19 @@ pub fn lookup_in(username: &str, passwd_path: &Path, group_path: &Path) -> Resul
 
 pub fn spawn(command: &[String], account: &Account, runtime_dir: &Path) -> Result<Child> {
     let executable = command.first().context("session command is empty")?;
+    validate_runtime_dir(runtime_dir, account.uid)?;
     command_for(command, account, runtime_dir)?
         .spawn()
         .with_context(|| format!("start session executable {executable}"))
+}
+
+fn validate_runtime_dir(path: &Path, uid: u32) -> Result<()> {
+    let metadata = fs::metadata(path)
+        .with_context(|| format!("inspect runtime directory {}", path.display()))?;
+    if !metadata.is_dir() || metadata.uid() != uid || metadata.mode() & 0o077 != 0 {
+        bail!("session runtime directory must be private and owned by the session user");
+    }
+    Ok(())
 }
 
 fn command_for(command: &[String], account: &Account, runtime_dir: &Path) -> Result<Command> {
@@ -139,6 +149,7 @@ mod tests {
     use super::*;
     use std::{
         fs,
+        os::unix::fs::PermissionsExt,
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -188,5 +199,16 @@ mod tests {
             Some(&Some("wayland".into()))
         );
         assert!(!environment.contains_key(std::ffi::OsStr::new("LD_PRELOAD")));
+    }
+
+    #[test]
+    fn requires_private_runtime_directory() {
+        let directory = std::env::temp_dir().join(format!("alphin-runtime-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(validate_runtime_dir(&directory, unsafe { libc::geteuid() }).is_ok());
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(validate_runtime_dir(&directory, unsafe { libc::geteuid() }).is_err());
+        fs::remove_dir(directory).unwrap();
     }
 }
