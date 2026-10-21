@@ -1,5 +1,6 @@
 pub mod adapter;
 pub mod daemon;
+pub mod identity;
 pub mod ipc;
 pub mod pam;
 pub mod session;
