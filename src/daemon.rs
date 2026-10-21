@@ -294,9 +294,39 @@ fn serve_connection(
             code: "invalid_request",
         },
     };
-    serde_json::to_writer(&mut stream, &response)?;
-    stream.write_all(b"\n")?;
+    if let Err(error) = serde_json::to_writer(&mut stream, &response) {
+        if json_peer_disconnected(&error) {
+            return Ok(());
+        }
+        return Err(error.into());
+    }
+    if let Err(error) = stream.write_all(b"\n") {
+        if peer_disconnected(&error) {
+            return Ok(());
+        }
+        return Err(error.into());
+    }
     Ok(())
+}
+
+fn peer_disconnected(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::ConnectionAborted
+    )
+}
+
+fn json_peer_disconnected(error: &serde_json::Error) -> bool {
+    error.io_error_kind().is_some_and(|kind| {
+        matches!(
+            kind,
+            std::io::ErrorKind::BrokenPipe
+                | std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::ConnectionAborted
+        )
+    })
 }
 
 fn handle(request: Request, sessions_path: &Path, state: &mut DaemonState) -> Result<Response> {
