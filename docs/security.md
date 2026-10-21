@@ -31,8 +31,9 @@ authenticated account, and permits a power request only after authentication.
 Seat ownership, VT switching, suspend, hibernate, reboot, and power-off are
 owned by systemd-logind. Alphind must call its logind APIs for those operations
 and rely on logind and polkit for authorization; it must not invoke system
-commands or treat greeter IPC membership as authorization. Until that backend
-is enabled, `PowerAction` is rejected.
+commands or treat greeter IPC membership as authorization. Before PAM opens a desktop session,
+Alphind supplies the Wayland session class and desktop metadata required by
+`pam_systemd` for logind session tracking.
 
 The greeter worker must stop its compositor before a desktop session starts.
 Alphind owns the worker and accepts its completion only from a private control

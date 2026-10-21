@@ -64,6 +64,7 @@ unsafe extern "C" {
     fn pam_authenticate(handle: *mut PamHandle, flags: c_int) -> c_int;
     fn pam_acct_mgmt(handle: *mut PamHandle, flags: c_int) -> c_int;
     fn pam_setcred(handle: *mut PamHandle, flags: c_int) -> c_int;
+    fn pam_putenv(handle: *mut PamHandle, name_value: *const c_char) -> c_int;
     fn pam_open_session(handle: *mut PamHandle, flags: c_int) -> c_int;
     fn pam_close_session(handle: *mut PamHandle, flags: c_int) -> c_int;
     fn pam_strerror(handle: *mut PamHandle, status: c_int) -> *const c_char;
@@ -186,6 +187,7 @@ impl Transaction {
             "establish PAM credentials",
         )?;
         self.credentials_established = true;
+        self.set_session_environment()?;
         check(
             self.handle,
             unsafe { pam_open_session(self.handle, 0) },
@@ -193,6 +195,23 @@ impl Transaction {
         )?;
         self.session_open = true;
         Ok(self)
+    }
+
+    fn set_session_environment(&self) -> Result<()> {
+        for value in [
+            "XDG_SESSION_CLASS=user",
+            "XDG_SESSION_TYPE=wayland",
+            "XDG_CURRENT_DESKTOP=Blair",
+            "XDG_SESSION_DESKTOP=Blair",
+        ] {
+            let value = CString::new(value).expect("PAM session variable is valid");
+            check(
+                self.handle,
+                unsafe { pam_putenv(self.handle, value.as_ptr()) },
+                "set PAM session environment",
+            )?;
+        }
+        Ok(())
     }
 
     fn run_authentication(&self) -> Result<()> {
