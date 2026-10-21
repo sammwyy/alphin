@@ -68,6 +68,12 @@ authentication and account management both succeed.
 
 ## Development
 
+Validate an installed configuration without starting a greeter:
+
+```bash
+alphin-doctor --config /etc/alphin/config.toml
+```
+
 ```bash
 cargo test
 cargo clippy --all-targets -- -D warnings
