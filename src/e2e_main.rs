@@ -18,7 +18,7 @@ fn main() -> Result<()> {
     client.respond("coconut".to_owned())?;
     wait_for_phase("authenticated", Duration::from_secs(10))?;
     client.start_session("alphin-e2e")?;
-    kill_process("coconut-greeter")?;
+    kill_process("alphin-e2e-gree")?;
     wait_for_phase("session_running", Duration::from_secs(30))?;
     kill_process("alphin-e2e-ses")?;
     wait_for_phase("greeter", Duration::from_secs(45))?;
