@@ -11,6 +11,8 @@ Type=simple
 ExecStart=/usr/lib/alphin/alphind --config /etc/alphin/config.toml
 Restart=on-failure
 RestartSec=2
+StandardOutput=journal+console
+StandardError=journal+console
 LimitCORE=0
 
 [Install]
