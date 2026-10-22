@@ -1,6 +1,12 @@
 use std::{
+    collections::HashMap,
     fs,
-    os::unix::{fs::FileTypeExt, io::RawFd, process::CommandExt},
+    os::unix::{
+        fs::{FileTypeExt, MetadataExt},
+        io::RawFd,
+        net::UnixStream,
+        process::CommandExt,
+    },
     path::{Path, PathBuf},
     process::{Child, Command},
     thread,
@@ -12,15 +18,27 @@ use anyhow::{bail, Context, Result};
 use crate::adapter::Adapter;
 
 pub fn run(compositor: &Adapter, greeter: &Adapter, runtime_dir: &Path) -> Result<()> {
+    let existing = wayland_sockets(runtime_dir)?;
     let mut compositor_process = spawn(compositor, runtime_dir, None)?;
-    let display = match wait_for_wayland_socket(runtime_dir, compositor.readiness_timeout()) {
+    let display = match wait_for_wayland_socket(
+        runtime_dir,
+        &existing,
+        &mut compositor_process,
+        compositor.readiness_timeout(),
+    ) {
         Ok(display) => display,
         Err(error) => {
             stop(&mut compositor_process, compositor.shutdown_timeout());
             return Err(error);
         }
     };
-    let mut greeter_process = spawn(greeter, runtime_dir, Some(&display))?;
+    let mut greeter_process = match spawn(greeter, runtime_dir, Some(&display)) {
+        Ok(process) => process,
+        Err(error) => {
+            stop(&mut compositor_process, compositor.shutdown_timeout());
+            return Err(error);
+        }
+    };
     supervise(
         &mut compositor_process,
         &mut greeter_process,
@@ -96,21 +114,41 @@ fn command_for(adapter: &Adapter, runtime_dir: &Path, display: Option<&str>) -> 
     command
 }
 
-fn wait_for_wayland_socket(runtime_dir: &Path, timeout: Duration) -> Result<String> {
+fn wayland_sockets(runtime_dir: &Path) -> Result<HashMap<String, (u64, u64)>> {
+    Ok(fs::read_dir(runtime_dir)
+        .with_context(|| format!("read runtime directory {}", runtime_dir.display()))?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            let metadata = entry.metadata().ok()?;
+            (name.starts_with("wayland-") && metadata.file_type().is_socket())
+                .then_some((name, (metadata.dev(), metadata.ino())))
+        })
+        .collect())
+}
+
+fn wait_for_wayland_socket(
+    runtime_dir: &Path,
+    existing: &HashMap<String, (u64, u64)>,
+    compositor: &mut Child,
+    timeout: Duration,
+) -> Result<String> {
     let deadline = Instant::now() + timeout;
     loop {
-        let mut displays = fs::read_dir(runtime_dir)
-            .with_context(|| format!("read runtime directory {}", runtime_dir.display()))?
-            .filter_map(Result::ok)
-            .filter_map(|entry| {
-                let name = entry.file_name().into_string().ok()?;
-                (name.starts_with("wayland-") && entry.file_type().ok()?.is_socket())
-                    .then_some(name)
-            })
+        let mut displays = wayland_sockets(runtime_dir)?
+            .into_iter()
+            .filter(|(name, identity)| existing.get(name) != Some(identity))
+            .map(|(name, _)| name)
             .collect::<Vec<_>>();
         displays.sort();
-        if let Some(display) = displays.into_iter().next() {
+        if let Some(display) = displays
+            .into_iter()
+            .find(|name| UnixStream::connect(runtime_dir.join(name)).is_ok())
+        {
             return Ok(display);
+        }
+        if let Some(status) = compositor.try_wait().context("check compositor status")? {
+            bail!("compositor exited before Wayland socket was ready with {status}");
         }
         if Instant::now() >= deadline {
             bail!("timed out waiting for compositor Wayland socket");
@@ -160,10 +198,58 @@ mod tests {
         fs::create_dir_all(&path).unwrap();
         let socket = path.join("wayland-1");
         let _listener = UnixListener::bind(&socket).unwrap();
+        let mut compositor = Command::new("/usr/bin/sleep").arg("5").spawn().unwrap();
         assert_eq!(
-            wait_for_wayland_socket(&path, Duration::ZERO).unwrap(),
+            wait_for_wayland_socket(&path, &Default::default(), &mut compositor, Duration::ZERO)
+                .unwrap(),
             "wayland-1"
         );
+        compositor.kill().unwrap();
+        compositor.wait().unwrap();
+        fs::remove_file(socket).unwrap();
+        fs::remove_dir(path).unwrap();
+    }
+
+    #[test]
+    fn skips_socket_left_by_previous_compositor() {
+        let path = std::env::temp_dir().join(format!("alphin-stale-socket-{}", std::process::id()));
+        fs::create_dir_all(&path).unwrap();
+        let stale = path.join("wayland-0");
+        let listener = UnixListener::bind(&stale).unwrap();
+        let existing = wayland_sockets(&path).unwrap();
+        drop(listener);
+        let fresh = path.join("wayland-1");
+        let _listener = UnixListener::bind(&fresh).unwrap();
+        let mut compositor = Command::new("/usr/bin/sleep").arg("5").spawn().unwrap();
+        assert_eq!(
+            wait_for_wayland_socket(&path, &existing, &mut compositor, Duration::ZERO).unwrap(),
+            "wayland-1"
+        );
+        compositor.kill().unwrap();
+        compositor.wait().unwrap();
+        fs::remove_file(stale).unwrap();
+        fs::remove_file(fresh).unwrap();
+        fs::remove_dir(path).unwrap();
+    }
+
+    #[test]
+    fn recognizes_rebound_socket_with_the_same_name() {
+        let path =
+            std::env::temp_dir().join(format!("alphin-rebound-socket-{}", std::process::id()));
+        fs::create_dir_all(&path).unwrap();
+        let socket = path.join("wayland-1");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let existing = wayland_sockets(&path).unwrap();
+        drop(listener);
+        fs::remove_file(&socket).unwrap();
+        let _listener = UnixListener::bind(&socket).unwrap();
+        let mut compositor = Command::new("/usr/bin/sleep").arg("5").spawn().unwrap();
+        assert_eq!(
+            wait_for_wayland_socket(&path, &existing, &mut compositor, Duration::ZERO).unwrap(),
+            "wayland-1"
+        );
+        compositor.kill().unwrap();
+        compositor.wait().unwrap();
         fs::remove_file(socket).unwrap();
         fs::remove_dir(path).unwrap();
     }

@@ -1,6 +1,7 @@
 use std::{
     collections::VecDeque,
     ffi::{CStr, CString},
+    fs,
     os::raw::{c_char, c_int, c_void},
     path::Path,
     ptr,
@@ -16,6 +17,7 @@ const PAM_PROMPT_ECHO_OFF: c_int = 1;
 const PAM_PROMPT_ECHO_ON: c_int = 2;
 const PAM_ESTABLISH_CRED: c_int = 0x0002;
 const PAM_DELETE_CRED: c_int = 0x0004;
+const PAM_TTY: c_int = 3;
 
 #[repr(C)]
 struct PamHandle {
@@ -64,7 +66,9 @@ unsafe extern "C" {
     fn pam_authenticate(handle: *mut PamHandle, flags: c_int) -> c_int;
     fn pam_acct_mgmt(handle: *mut PamHandle, flags: c_int) -> c_int;
     fn pam_setcred(handle: *mut PamHandle, flags: c_int) -> c_int;
+    fn pam_set_item(handle: *mut PamHandle, item_type: c_int, item: *const c_void) -> c_int;
     fn pam_putenv(handle: *mut PamHandle, name_value: *const c_char) -> c_int;
+    fn pam_getenv(handle: *mut PamHandle, name: *const c_char) -> *const c_char;
     fn pam_open_session(handle: *mut PamHandle, flags: c_int) -> c_int;
     fn pam_close_session(handle: *mut PamHandle, flags: c_int) -> c_int;
     fn pam_strerror(handle: *mut PamHandle, status: c_int) -> *const c_char;
@@ -74,10 +78,19 @@ pub struct Secret(Vec<u8>);
 
 impl Secret {
     pub fn new(value: String) -> Result<Self> {
-        if value.as_bytes().contains(&0) {
+        Self::from_bytes(value.into_bytes())
+    }
+
+    pub fn from_bytes(value: Vec<u8>) -> Result<Self> {
+        let secret = Self(value);
+        if secret.0.contains(&0) {
             bail!("PAM response contains a NUL byte");
         }
-        Ok(Self(value.into_bytes()))
+        Ok(secret)
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
     }
 }
 
@@ -187,6 +200,16 @@ impl Transaction {
             "establish PAM credentials",
         )?;
         self.credentials_established = true;
+        if let Ok(active_tty) = fs::read_to_string("/sys/class/tty/tty0/active") {
+            if let Some(tty) = active_session_tty(&active_tty) {
+                let tty = CString::new(format!("/dev/{tty}"))?;
+                check(
+                    self.handle,
+                    unsafe { pam_set_item(self.handle, PAM_TTY, tty.as_ptr().cast()) },
+                    "set PAM session TTY",
+                )?;
+            }
+        }
         self.set_session_environment()?;
         check(
             self.handle,
@@ -195,6 +218,24 @@ impl Transaction {
         )?;
         self.session_open = true;
         Ok(self)
+    }
+
+    pub fn session_environment(&self) -> Vec<(String, String)> {
+        ["XDG_SESSION_ID", "XDG_SEAT", "XDG_VTNR"]
+            .into_iter()
+            .filter_map(|name| {
+                let name_c = CString::new(name).expect("PAM environment variable name is valid");
+                let value = unsafe { pam_getenv(self.handle, name_c.as_ptr()) };
+                (!value.is_null()).then(|| {
+                    (
+                        name.to_owned(),
+                        unsafe { CStr::from_ptr(value) }
+                            .to_string_lossy()
+                            .into_owned(),
+                    )
+                })
+            })
+            .collect()
     }
 
     fn set_session_environment(&self) -> Result<()> {
@@ -226,6 +267,12 @@ impl Transaction {
             "validate PAM account",
         )
     }
+}
+
+fn active_session_tty(value: &str) -> Option<&str> {
+    let tty = value.trim();
+    let number = tty.strip_prefix("tty")?.parse::<u16>().ok()?;
+    (number > 0).then_some(tty)
 }
 
 impl Drop for Transaction {
@@ -434,6 +481,14 @@ mod tests {
         let service = fs::read_to_string(path).unwrap();
         assert!(service.lines().any(|line| line.contains("pam_systemd.so")));
         assert!(service.lines().any(|line| line.contains("system-auth")));
+    }
+
+    #[test]
+    fn accepts_only_a_real_virtual_terminal_for_the_session() {
+        assert_eq!(active_session_tty("tty1\n"), Some("tty1"));
+        assert_eq!(active_session_tty("tty12\n"), Some("tty12"));
+        assert_eq!(active_session_tty("tty0\n"), None);
+        assert_eq!(active_session_tty("pts/1\n"), None);
     }
 
     #[test]

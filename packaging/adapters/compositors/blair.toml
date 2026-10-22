@@ -6,6 +6,8 @@ shutdown_timeout_seconds = 10
 [environment]
 XDG_STATE_HOME = "/run/alphin/state"
 LIBSEAT_BACKEND = "seatd"
+BLAIR_LOG_STDERR = "1"
+RUST_LOG = "blair=info,warn"
 
 [readiness]
 kind = "wayland_socket"

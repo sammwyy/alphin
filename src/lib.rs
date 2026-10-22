@@ -8,5 +8,6 @@ pub mod ipc;
 pub mod logind;
 pub mod pam;
 pub mod session;
+pub mod session_worker;
 pub mod users;
 pub mod worker;

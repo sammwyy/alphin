@@ -18,6 +18,10 @@ name = "alphind"
 path = "src/daemon_main.rs"
 
 [[bin]]
+name = "alphin-session-worker"
+path = "src/session_main.rs"
+
+[[bin]]
 name = "alphin-doctor"
 path = "src/doctor_main.rs"
 

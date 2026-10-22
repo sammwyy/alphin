@@ -4,12 +4,12 @@ use std::{
     os::unix::{
         ffi::OsStrExt,
         fs::{FileTypeExt, MetadataExt, PermissionsExt},
-        io::{AsRawFd, FromRawFd, RawFd},
+        io::{AsRawFd, FromRawFd, OwnedFd, RawFd},
         net::{UnixListener, UnixStream},
         process::CommandExt,
     },
     path::{Path, PathBuf},
-    process::{Child, Command},
+    process::{Child, Command, Stdio},
     sync::mpsc::{self, Receiver, Sender, TryRecvError},
     thread,
 };
@@ -22,7 +22,9 @@ use crate::{
     ipc::{Request, Response, SessionInfo, UserInfo, PROTOCOL_VERSION},
     logind,
     pam::{self, Secret},
-    session, users,
+    session,
+    session_worker::{self, Message},
+    users,
 };
 
 pub struct WorkerMonitor {
@@ -110,6 +112,7 @@ impl WorkerMonitor {
 
     fn poll(&mut self) -> Result<WorkerState> {
         if self.stopped {
+            self.child.try_wait()?;
             return Ok(WorkerState::Stopped);
         }
         let mut signal = [0_u8];
@@ -241,7 +244,7 @@ fn serve_listener(
         }
         state.launch_pending()?;
         if state.restart_required {
-            bail!("desktop session exited; restarting greeter");
+            bail!("desktop session ended or failed; restarting greeter");
         }
         match listener.accept() {
             Ok((stream, _)) => {
@@ -471,61 +474,80 @@ impl DaemonState {
         let (responses, response_receiver) = mpsc::channel();
         let (commands, command_receiver) = mpsc::channel();
         let (events, event_receiver) = mpsc::channel();
+        let (mut stream, worker_stream) =
+            UnixStream::pair().context("create PAM session worker channel")?;
+        let helper = std::env::current_exe()?.with_file_name("alphin-session-worker");
+        let mut child = Command::new(helper)
+            .stdin(Stdio::from(OwnedFd::from(worker_stream)))
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .spawn()
+            .context("start PAM session worker")?;
         let thread_username = username.clone();
         thread::spawn(move || {
-            let (prompts, prompt_receiver) = mpsc::channel();
-            let prompt_events = events.clone();
-            let forwarder = thread::spawn(move || {
-                while let Ok(prompt) = prompt_receiver.recv() {
-                    if prompt_events
-                        .send(AuthenticationEvent::Prompt(prompt))
-                        .is_err()
-                    {
-                        break;
+            let mut authenticated = false;
+            let result = (|| -> Result<()> {
+                let mut reader = BufReader::new(stream.try_clone()?);
+                session_worker::send(
+                    &mut stream,
+                    &Message::Begin {
+                        username: thread_username.clone(),
+                    },
+                )?;
+                loop {
+                    match session_worker::receive(&mut reader)? {
+                        Message::Prompt { message, echo } => {
+                            events
+                                .send(AuthenticationEvent::Prompt(pam::Prompt { message, echo }))
+                                .context("deliver PAM prompt")?;
+                            session_worker::send_secret(&mut stream, &response_receiver.recv()?)?;
+                        }
+                        Message::Succeeded => {
+                            authenticated = true;
+                            events.send(AuthenticationEvent::Succeeded)?;
+                            let AuthenticationCommand::Launch {
+                                command,
+                                account,
+                                runtime_dir,
+                            } = command_receiver.recv()?;
+                            session_worker::send(
+                                &mut stream,
+                                &Message::Launch {
+                                    command,
+                                    account,
+                                    runtime_dir,
+                                },
+                            )?;
+                        }
+                        Message::Failed => {
+                            let _ = events.send(AuthenticationEvent::Failed);
+                            return Ok(());
+                        }
+                        Message::SessionStarted => {
+                            events.send(AuthenticationEvent::SessionStarted)?;
+                        }
+                        Message::SessionFailed => {
+                            let _ = events.send(AuthenticationEvent::SessionFailed);
+                            return Ok(());
+                        }
+                        Message::SessionExited => {
+                            let _ = events.send(AuthenticationEvent::SessionExited);
+                            return Ok(());
+                        }
+                        _ => bail!("unexpected PAM session worker message"),
                     }
                 }
-            });
-            let result = pam::Transaction::authenticate_interactive(
-                "alphin",
-                &thread_username,
-                prompts,
-                response_receiver,
-            );
-            let Ok(transaction) = result else {
-                let _ = events.send(AuthenticationEvent::Failed);
-                let _ = forwarder.join();
-                return;
-            };
-            let _ = events.send(AuthenticationEvent::Succeeded);
-            let _ = forwarder.join();
-            let Ok(AuthenticationCommand::Launch {
-                command,
-                account,
-                runtime_dir,
-            }) = command_receiver.recv()
-            else {
-                return;
-            };
-            let transaction = match transaction.open_session() {
-                Ok(transaction) => transaction,
-                Err(error) => {
-                    eprintln!("failed to open PAM session for {thread_username}: {error:#}");
-                    let _ = events.send(AuthenticationEvent::SessionFailed);
-                    return;
-                }
-            };
-            let mut child = match identity::spawn(&command, &account, &runtime_dir) {
-                Ok(child) => child,
-                Err(error) => {
-                    eprintln!("failed to launch session for {thread_username}: {error:#}");
-                    let _ = events.send(AuthenticationEvent::SessionFailed);
-                    return;
-                }
-            };
-            let _ = events.send(AuthenticationEvent::SessionStarted);
+            })();
+            if let Err(error) = result {
+                eprintln!("PAM session worker for {thread_username}: {error:#}");
+                let _ = events.send(if authenticated {
+                    AuthenticationEvent::SessionFailed
+                } else {
+                    AuthenticationEvent::Failed
+                });
+                let _ = child.kill();
+            }
             let _ = child.wait();
-            drop(transaction);
-            let _ = events.send(AuthenticationEvent::SessionExited);
         });
         self.authentication = Some(Authentication {
             username,
@@ -587,8 +609,12 @@ impl DaemonState {
                     break;
                 }
                 Ok(AuthenticationEvent::SessionFailed) => {
+                    self.authentication = None;
+                    self.authenticated = false;
                     self.session_starting = false;
                     self.pending_session = None;
+                    self.restart_required = true;
+                    break;
                 }
                 Ok(AuthenticationEvent::Failed) | Err(TryRecvError::Disconnected) => {
                     self.authentication = None;
@@ -804,6 +830,23 @@ mod tests {
         };
         assert!(matches!(worker.poll().unwrap(), WorkerState::Stopped));
         assert!(matches!(worker.poll().unwrap(), WorkerState::Stopped));
+        let pid = worker.child.id() as i32;
+        for _ in 0..20 {
+            worker.poll().unwrap();
+            if unsafe { libc::kill(pid, 0) } != 0 {
+                break;
+            }
+            thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let mut status = 0;
+        assert_eq!(
+            unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) },
+            -1
+        );
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ECHILD)
+        );
     }
 
     #[test]
@@ -911,6 +954,29 @@ mod tests {
             session_started: true,
             restart_required: false,
             user_policy: Default::default(),
+        };
+        state.pump();
+        assert!(state.restart_required);
+        assert!(state.authentication.is_none());
+    }
+
+    #[test]
+    fn restarts_greeter_if_desktop_session_cannot_start() {
+        let (responses, _) = mpsc::channel();
+        let (commands, _) = mpsc::channel();
+        let (events, receiver) = mpsc::channel();
+        events.send(AuthenticationEvent::SessionFailed).unwrap();
+        let mut state = DaemonState {
+            authentication: Some(Authentication {
+                username: "user".into(),
+                responses,
+                commands,
+                events: receiver,
+            }),
+            authenticated: true,
+            greeter_stopped: true,
+            session_starting: true,
+            ..Default::default()
         };
         state.pump();
         assert!(state.restart_required);

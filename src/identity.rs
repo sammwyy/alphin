@@ -7,8 +7,9 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Account {
     pub username: String,
     pub uid: u32,
@@ -41,10 +42,15 @@ pub fn lookup_in(username: &str, passwd_path: &Path, group_path: &Path) -> Resul
     Ok(account)
 }
 
-pub fn spawn(command: &[String], account: &Account, runtime_dir: &Path) -> Result<Child> {
+pub fn spawn(
+    command: &[String],
+    account: &Account,
+    runtime_dir: &Path,
+    session_environment: &[(String, String)],
+) -> Result<Child> {
     let executable = command.first().context("session command is empty")?;
     validate_runtime_dir(runtime_dir, account.uid)?;
-    command_for(command, account, runtime_dir)?
+    command_for(command, account, runtime_dir, session_environment)?
         .spawn()
         .with_context(|| format!("start session executable {executable}"))
 }
@@ -58,7 +64,12 @@ fn validate_runtime_dir(path: &Path, uid: u32) -> Result<()> {
     Ok(())
 }
 
-fn command_for(command: &[String], account: &Account, runtime_dir: &Path) -> Result<Command> {
+fn command_for(
+    command: &[String],
+    account: &Account,
+    runtime_dir: &Path,
+    session_environment: &[(String, String)],
+) -> Result<Command> {
     let executable = command.first().context("session command is empty")?;
     if command.iter().any(|argument| argument.contains('\0')) {
         bail!("session command contains a NUL byte");
@@ -84,6 +95,7 @@ fn command_for(command: &[String], account: &Account, runtime_dir: &Path) -> Res
         .env("XDG_RUNTIME_DIR", runtime_dir)
         .env("XDG_SESSION_TYPE", "wayland")
         .env("XDG_CURRENT_DESKTOP", "Blair");
+    process.envs(session_environment.iter().map(|(key, value)| (key, value)));
     unsafe {
         process.pre_exec(move || {
             if libc::geteuid() == 0 {
@@ -187,6 +199,7 @@ mod tests {
             &["/usr/bin/env".into()],
             &account,
             Path::new("/run/user/1000"),
+            &[],
         )
         .unwrap();
         let environment = process
@@ -199,6 +212,16 @@ mod tests {
             Some(&Some("wayland".into()))
         );
         assert!(!environment.contains_key(std::ffi::OsStr::new("LD_PRELOAD")));
+        let process = command_for(
+            &["/usr/bin/env".into()],
+            &account,
+            Path::new("/run/user/1000"),
+            &[("XDG_SESSION_ID".into(), "4".into())],
+        )
+        .unwrap();
+        assert!(process
+            .get_envs()
+            .any(|(name, value)| name == "XDG_SESSION_ID" && value == Some("4".as_ref())));
     }
 
     #[test]
