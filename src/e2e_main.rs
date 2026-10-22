@@ -1,5 +1,6 @@
 use std::{
     fs,
+    os::unix::fs::FileTypeExt,
     process::Command,
     thread,
     time::{Duration, Instant},
@@ -88,12 +89,13 @@ fn enter_password() -> Result<()> {
 }
 
 fn run_wtype(arguments: impl IntoIterator<Item = &'static str>) -> Result<()> {
+    let display = wayland_display()?;
     let status = Command::new("/usr/bin/setpriv")
         .args(["--reuid=alphin", "--regid=alphin", "--init-groups"])
         .arg("/usr/bin/wtype")
         .args(arguments)
         .env("XDG_RUNTIME_DIR", "/run/alphin")
-        .env("WAYLAND_DISPLAY", "wayland-0")
+        .env("WAYLAND_DISPLAY", display)
         .status()
         .context("run Wayland input driver")?;
     if status.success() {
@@ -101,6 +103,21 @@ fn run_wtype(arguments: impl IntoIterator<Item = &'static str>) -> Result<()> {
     } else {
         bail!("Wayland input driver exited with {status}")
     }
+}
+
+fn wayland_display() -> Result<String> {
+    let mut displays = fs::read_dir("/run/alphin")?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            (name.starts_with("wayland-") && entry.file_type().ok()?.is_socket()).then_some(name)
+        })
+        .collect::<Vec<_>>();
+    displays.sort();
+    displays
+        .into_iter()
+        .next()
+        .context("no compositor Wayland socket is available")
 }
 
 fn require_process(name: &str, uid: u32) -> Result<()> {
