@@ -1,5 +1,7 @@
 use std::{
-    fs, thread,
+    fs,
+    process::Command,
+    thread,
     time::{Duration, Instant},
 };
 
@@ -14,6 +16,10 @@ fn main() -> Result<()> {
     let client = Client::new(SOCKET);
     require_user(&client, "coconut")?;
     require_session(&client, "coconut")?;
+    thread::sleep(Duration::from_secs(2));
+    click_sign_in()?;
+    thread::sleep(Duration::from_secs(1));
+    enter_password()?;
     wait_for_phase("session_running", Duration::from_secs(45))?;
     require_process("blair", SESSION_UID)?;
     kill_process("blair", SESSION_UID)?;
@@ -21,6 +27,28 @@ fn main() -> Result<()> {
     require_process("coconut-greete", account_uid("alphin")?)?;
     println!("ALPHIN_E2E_OK graphical greeter pam handoff coconut logout recovery");
     Ok(())
+}
+
+fn click_sign_in() -> Result<()> {
+    run_ydotool(["mousemove", "--absolute", "-x", "683", "-y", "404"])?;
+    run_ydotool(["click", "0xC0"])
+}
+
+fn enter_password() -> Result<()> {
+    run_ydotool(["type", "coconut"])?;
+    run_ydotool(["key", "28:1", "28:0"])
+}
+
+fn run_ydotool(arguments: impl IntoIterator<Item = &'static str>) -> Result<()> {
+    let status = Command::new("/usr/bin/ydotool")
+        .args(arguments)
+        .status()
+        .context("run virtual hardware input driver")?;
+    if status.success() {
+        Ok(())
+    } else {
+        bail!("virtual hardware input driver exited with {status}")
+    }
 }
 
 fn wait_for_phase(expected: &str, timeout: Duration) -> Result<()> {
