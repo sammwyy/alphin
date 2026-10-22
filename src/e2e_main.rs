@@ -78,11 +78,13 @@ fn require_session(client: &Client, id: &str) -> Result<()> {
 }
 
 fn click_sign_in() -> Result<()> {
-    run_wtype(["-M", "683", "404", "-P", "1", "-R", "1"])
+    run_wtype([
+        "-k", "Tab", "-k", "Tab", "-k", "Tab", "-k", "Tab", "-k", "Tab", "-k", "Return",
+    ])
 }
 
 fn enter_password() -> Result<()> {
-    run_wtype(["-s", "25", "coconut", "-k", "Return"])
+    run_wtype(["coconut", "-k", "Return"])
 }
 
 fn run_wtype(arguments: impl IntoIterator<Item = &'static str>) -> Result<()> {
