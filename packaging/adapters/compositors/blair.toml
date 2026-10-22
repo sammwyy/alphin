@@ -5,6 +5,7 @@ shutdown_timeout_seconds = 10
 
 [environment]
 XDG_STATE_HOME = "/run/alphin/state"
+LIBSEAT_BACKEND = "seatd"
 
 [readiness]
 kind = "wayland_socket"
