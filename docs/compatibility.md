@@ -2,7 +2,7 @@
 
 | Component | Status | Requirements |
 | --- | --- | --- |
-| Blair greeter adapter | Supported | `blair --profile greeter`, system-only config, Wayland socket readiness |
+| Blair greeter adapter | Supported | `blair --profile greeter` (`/etc/blair/profiles/greeter.toml`), Wayland socket readiness |
 | Coconut greeter adapter | Available | `coconut-greeter`, IPC version 1, CreamUI Wayland overlay |
 | Wayland desktop sessions | Supported | Valid desktop entry, available `TryExec` when declared |
 | X11 sessions | Unsupported | No adapter is installed |

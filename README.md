@@ -20,8 +20,8 @@ Adapters belong to root-managed package paths:
 An adapter has an absolute executable path, literal arguments, a restricted
 environment, Wayland readiness timeout, and shutdown timeout. It does not
 accept commands from clients or per-user configuration. The included Blair
-adapter uses `blair --profile greeter`; that profile reads only
-`/etc/blair/greeter.toml`, never user Blair configuration.
+adapter uses `blair --profile greeter`. That profile reads only
+`/etc/blair/profiles/greeter.toml`, never user Blair configuration.
 
 `/etc/alphin/config.toml` selects the socket, runtime directory, session
 catalogue, worker executable, and installed adapters. Every configured path
@@ -79,7 +79,7 @@ Install the bundled artifacts at these paths:
 /usr/lib/alphin/compositors/blair.toml
 /usr/lib/alphin/greeters/coconut.toml
 /etc/alphin/config.toml
-/etc/blair/greeter.toml
+/etc/blair/profiles/greeter.toml
 /etc/pam.d/alphin
 /usr/lib/systemd/system/alphind.service
 /usr/lib/systemd/system/alphind.socket
